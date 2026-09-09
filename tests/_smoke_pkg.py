@@ -7,7 +7,7 @@ import subprocess
 import urllib.request
 from urllib.parse import quote
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXE = os.path.join(HERE, "dist", "猫娘来咯.exe")
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 

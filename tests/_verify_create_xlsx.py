@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """验证 create_xlsx 工具（隔离 APPDATA，不碰真实用户数据）。"""
 import os, sys, glob, shutil, tempfile
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 tmp = tempfile.mkdtemp(prefix="catgirl_xlsx_")
 os.environ["APPDATA"] = tmp

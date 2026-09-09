@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import webview  # noqa: E402
 import desktop.app  # noqa: E402  # 模块级执行 env var 注入（真实代码路径）

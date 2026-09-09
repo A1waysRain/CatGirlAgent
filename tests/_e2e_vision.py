@@ -13,7 +13,7 @@ sys.modules["image_vision_plugin"] = p
 spec.loader.exec_module(p)
 
 img = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "img", "cat.png")
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "img", "cat.png")
 if not os.path.isfile(img):
     print(f"❌ 图片不存在：{img}")
     sys.exit(1)

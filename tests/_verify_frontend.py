@@ -14,7 +14,7 @@ import urllib.request
 
 from playwright.sync_api import sync_playwright
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 8791
 BASE = f"http://127.0.0.1:{PORT}"
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
