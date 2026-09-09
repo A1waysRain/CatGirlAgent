@@ -1,0 +1,40 @@
+# ─────────────────────────────
+# 猫娘来咯 Cat_Girl/.gitignore
+# 作品集仓库：只推代码 + 轻量运行资源。以下一律挡在库外。
+# ─────────────────────────────
+
+# ───── API Key / 配置：绝不提交（进了 git 历史就收不回）─────
+.env
+*.key
+config.json
+
+# ───── Python / venv ─────
+.venv/
+.wsl-venv/
+__pycache__/
+*.py[cod]
+
+# ───── 构建产物 / 日志 / 临时备份 ─────
+build/
+dist/
+*.log
+*.bak
+.m4_build/
+
+# ───── OCR 模型等大二进制（可再生；部署走整个 dist\，不靠 git）─────
+maa_assets/
+
+# ───── 个人素材：真人头像不公开 ─────
+img/user.jpg
+
+# ───── 桌宠运行状态（会变，非源码）─────
+pet_assets/pet_state.json
+
+# ───── 残留 / 临时文件 ─────
+:memory:.ses
+*.ses
+
+# ───── Claude Code 运行时（不进版本库）─────
+.claude/scheduled_tasks.*
+.claude/worktrees/
+.claude/routines/.state/

@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>猫娘来咯</title>
+    <link rel="icon" href="/img/cat.png">
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- ===== 侧栏 ===== -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="avatar"><img src="/img/cat.png" alt="" id="brandAvatar"></div>
+      <div class="brand-name"><b id="brandName" title="点 ✎ 修改称呼">猫娘</b><span>随时在线的助手</span></div>
+      <button class="name-edit" id="nameEditBtn" title="修改称呼"><img src="/img/icons/编辑.png" alt="修改称呼"></button>
+    </div>
+
+    <button class="new-chat" id="newChatBtn"><img src="/img/icons/添加.png" alt="新对话"><span class="nc-txt">新对话</span></button>
+
+    <div class="search-wrap">
+      <input type="text" id="chatSearchInput" class="search-input"
+        placeholder="搜索聊天记录…" autocomplete="off" spellcheck="false">
+      <div class="search-results" id="chatSearchResults" hidden></div>
+    </div>
+
+    <div class="side-label">历史会话</div>
+    <nav class="session-list" id="sessionList"></nav>
+
+    <div class="side-label func-label">功能</div>
+    <nav class="func-list">
+      <button class="func-item" data-func="settings" title="设置"><span class="fi"><img src="/img/icons/设置.png" alt="设置"></span><span class="ft">设置</span></button>
+      <button class="func-item" data-func="remind" title="提醒" data-scroll="group-remind"><span class="fi"><img src="/img/icons/闹钟.png" alt="提醒"></span><span class="ft">提醒</span></button>
+      <button class="func-item" data-func="apps" title="应用" data-scroll="group-apps"><span class="fi"><img src="/img/icons/放大镜.png" alt="应用"></span><span class="ft">应用</span></button>
+      <button class="func-item" data-func="plugins" title="插件" data-scroll="group-plugins"><span class="fi"><img src="/img/icons/插件管理.png" alt="插件"></span><span class="ft">插件</span></button>
+      <button class="func-item" data-func="memory" title="猫娘记忆" data-scroll="group-memory"><span class="fi"><img src="/img/icons/会话.png" alt="记忆"></span><span class="ft">记忆</span></button>
+    </nav>
+  </aside>
+
+  <!-- ===== 主区 ===== -->
+  <main class="main">
+    <header class="topbar">
+      <button class="collapse-btn" id="collapseBtn" title="收起/展开侧栏"><img src="/img/icons/箭头-左.png" alt="收起/展开"></button>
+      <div class="cur-title">
+        <span class="dot"></span>
+        <h2 id="curTitle">新会话</h2>
+        <span id="curMeta"></span>
+      </div>
+      <button class="clear-btn" id="clearBtn" title="清空当前会话消息"><img src="/img/icons/删除.png" alt="清空">清空</button>
+    </header>
+
+    <div class="chat-area" id="chatArea"></div>
+
+    <footer class="input-area">
+      <div class="chat-toolbar">
+        <button id="screenshotBtn" class="tool-btn" title="截图"><span class="ti"><img src="/img/icons/截图.png" alt="截图"></span>截图</button>
+        <button id="uploadImageBtn" class="tool-btn" title="上传图片"><span class="ti"><img src="/img/icons/相册.png" alt="上传图片"></span>上传图片</button>
+        <button id="uploadFileBtn" class="tool-btn" title="上传文件"><span class="ti"><img src="/img/icons/文件.png" alt="上传文件"></span>上传文件</button>
+      </div>
+      <div class="input-wrapper">
+        <textarea id="messageInput" class="message-input" rows="1"
+          placeholder="和猫娘说点什么吧喵～（Shift+Enter 换行）" maxlength="500"></textarea>
+        <button class="send-btn" id="sendBtn" title="发送"><img src="/img/icons/发送.png" alt="发送"></button>
+      </div>
+    </footer>
+  </main>
+</div>
+
+<!-- ===== 设置浮层 ===== -->
+<div class="overlay" id="settingsOverlay">
+  <div class="settings-panel">
+    <div class="settings-head">
+      <h3>设置</h3>
+      <button id="settingsCloseBtn" title="关闭"><img src="/img/icons/关闭.png" alt="关闭"></button>
+    </div>
+    <div class="settings-body">
+
+      <div class="set-group">
+        <h4>头像</h4>
+        <div class="set-row">
+          <span class="set-label">用户头像</span>
+          <img id="userAvatarPreview" class="avatar avatar-preview" alt="">
+          <button id="changeUserAvatar" class="setting-btn">更换</button>
+        </div>
+        <div class="set-row">
+          <span class="set-label">猫娘头像</span>
+          <img id="catAvatarPreview" class="avatar avatar-preview" alt="">
+          <button id="changeCatAvatar" class="setting-btn">更换</button>
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h4>桌宠</h4>
+        <div class="set-row">
+          <span class="set-label">显示桌面宠物</span>
+          <label class="switch"><input type="checkbox" id="showPetSwitch"><span class="knob"></span></label>
+        </div>
+        <div class="set-row">
+          <span class="set-label">闲时踱步</span>
+          <label class="switch"><input type="checkbox" id="walkSwitch"><span class="knob"></span></label>
+        </div>
+      </div>
+
+      <div class="set-group" id="group-remind">
+        <h4>提醒</h4>
+        <div class="set-row">
+          <span class="set-label">喝水提醒（每 45 分钟）</span>
+          <label class="switch"><input type="checkbox" id="waterSwitch"><span class="knob"></span></label>
+        </div>
+        <div class="set-row">
+          <span class="set-label">久坐提醒（每 60 分钟）</span>
+          <label class="switch"><input type="checkbox" id="stretchSwitch"><span class="knob"></span></label>
+        </div>
+        <div class="set-row">
+          <span class="set-label">番茄钟</span>
+          <label class="switch"><input type="checkbox" id="pomodoroSwitch"><span class="knob"></span></label>
+        </div>
+        <div class="set-row">
+          <span class="set-label">工作时长</span>
+          <input type="number" id="pomodoroWorkInput" class="setting-input" min="1" max="120" value="25"> <span class="set-hint">分钟</span>
+        </div>
+        <div class="set-row">
+          <span class="set-label">休息时长</span>
+          <input type="number" id="pomodoroBreakInput" class="setting-input" min="1" max="60" value="5"> <span class="set-hint">分钟</span>
+        </div>
+        <div class="set-row">
+          <span class="set-label">深夜劝睡（23:00–06:00）</span>
+          <label class="switch"><input type="checkbox" id="sleepNudgeSwitch"><span class="knob"></span></label>
+        </div>
+        <div class="set-row">
+          <span class="set-label">定点提醒</span>
+        </div>
+        <div class="alarm-form">
+          <div class="alarm-field">
+            <span class="alarm-label">日期</span>
+            <input type="date" id="alarmDateInput" class="setting-input alarm-date" title="具体哪天提醒（可选，一次性才填）">
+            <span class="set-hint">一次性才填</span>
+          </div>
+          <div class="alarm-field">
+            <span class="alarm-label">时间</span>
+            <input type="time" id="alarmTimeInput" class="setting-input alarm-time" title="提醒时间">
+          </div>
+          <div class="alarm-field">
+            <span class="alarm-label">内容</span>
+            <input type="text" id="alarmMsgInput" class="setting-input alarm-msg" placeholder="提醒内容，如 喝水" maxlength="30">
+          </div>
+          <div class="alarm-field">
+            <span class="alarm-label">周期</span>
+            <select id="alarmRepeatSelect" class="setting-input alarm-repeat">
+              <option value="once">一次性</option>
+              <option value="daily">每天</option>
+            </select>
+            <button id="addAlarmBtn" class="setting-btn alarm-add-btn">添加</button>
+          </div>
+        </div>
+        <button id="alarmToggleBtn" class="setting-btn alarm-toggle-btn" type="button">
+          <span id="alarmToggleLabel">查看已设置的提醒 ▸</span>
+        </button>
+        <div id="alarmWrap" class="alarm-list-wrap" hidden>
+          <div id="alarmList" class="plugin-list">加载中…</div>
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h4>系统</h4>
+        <div class="set-row">
+          <span class="set-label">开机自启动</span>
+          <label class="switch"><input type="checkbox" id="autostartSwitch"><span class="knob"></span></label>
+        </div>
+        <div class="set-row">
+          <span class="set-label">猫娘名字</span>
+          <input type="text" id="petNameInput" class="setting-input" maxlength="12" placeholder="猫娘">
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h4>窗口</h4>
+        <div class="set-row">
+          <span class="set-label">点击关闭时</span>
+          <select id="closeBehaviorSelect" class="setting-input">
+            <option value="tray">仅隐藏到托盘</option>
+            <option value="exit">直接退出</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="set-group" id="group-lan">
+        <h4>手机接入</h4>
+        <div class="set-row">
+          <span class="set-label">允许手机通过热点访问</span>
+          <label class="switch"><input type="checkbox" id="lanEnabledSwitch"><span class="knob"></span></label>
+        </div>
+        <div class="set-row">
+          <span class="set-label">电脑热点 IP</span>
+          <input type="text" id="lanIpInput" class="setting-input" list="lanIpOptions" placeholder="选择或输入，例如 192.168.43.2">
+          <datalist id="lanIpOptions"></datalist>
+        </div>
+        <div class="set-row">
+          <span class="set-label">端口</span>
+          <input type="number" id="lanPortInput" class="setting-input" min="1" max="65535" value="8800">
+        </div>
+        <div class="set-row">
+          <span class="set-label">接入令牌</span>
+          <input type="text" id="lanTokenInput" class="setting-input" readonly>
+          <button id="lanTokenResetBtn" class="setting-btn" type="button">重置</button>
+        </div>
+        <div class="set-row"><span id="lanAddressHint" class="set-hint">先连接手机热点，再填写电脑获得的 IPv4 地址。</span></div>
+      </div>
+
+      <div class="set-group" id="group-apps">
+        <h4>应用</h4>
+        <div class="set-row">
+          <span class="set-label">可启动应用</span>
+          <button id="scanAppsBtn" class="setting-btn">扫描本机应用</button>
+        </div>
+        <div class="set-row">
+          <span class="set-label app-scan-info" id="appScanInfo">未扫描</span>
+        </div>
+      </div>
+
+      <div class="set-group" id="group-memory">
+        <h4>猫娘记忆</h4>
+        <div class="set-row memory-view-row">
+          <span class="set-label">查看会话</span>
+          <select id="memorySessionSelect" class="setting-input memory-session-select">
+            <option value="">加载中…</option>
+          </select>
+          <span class="set-hint">的记忆</span>
+        </div>
+        <div class="set-row">
+          <span class="set-label">小本本（更早聊过的要点）</span>
+          <button id="refreshMemoryBtn" class="setting-btn">刷新</button>
+          <button id="toggleMemoryBtn" class="setting-btn" aria-expanded="false">展开</button>
+          <button id="clearMemoryBtn" class="setting-btn danger">清空记忆</button>
+        </div>
+        <div id="memoryDetails" hidden>
+          <div class="set-hint memory-hint">猫娘会把所选会话里比较久远的重要事情提炼成要点记在小本本上。聊天时它只认当前会话的记忆。清空只清选中的那个会话。</div>
+          <div id="memoryList" class="plugin-list">还没有记忆喵，多聊聊就有了</div>
+        </div>
+        <div class="set-row context-items-row">
+          <span class="set-label">上下文保留项</span>
+          <button id="refreshContextItemsBtn" class="setting-btn" title="刷新保留项">刷新</button>
+          <button id="toggleContextItemsBtn" class="setting-btn" aria-expanded="false">展开</button>
+        </div>
+        <div id="contextItemsDetails" hidden>
+          <div class="set-hint memory-hint">文件路径和赛程等线索会暂存一段时间。固定保存后不会自动过期；停止保留只影响猫娘后续上下文，聊天记录仍在。</div>
+          <div id="contextItemsList" class="plugin-list">还没有可管理的保留项喵</div>
+        </div>
+      </div>
+
+      <div class="set-group" id="group-rag">
+        <h4>知识库</h4>
+        <div class="set-row">
+          <span class="set-label">RAG 文档</span>
+          <button id="importRagFileBtn" class="setting-btn">导入文件</button>
+          <button id="rebuildRagBtn" class="setting-btn">重建索引</button>
+          <button id="toggleRagBtn" class="setting-btn" aria-expanded="false">展开</button>
+        </div>
+        <div id="ragDetails" hidden>
+          <div id="ragStatus" class="set-hint">加载中…</div>
+          <div id="ragFileList" class="plugin-list">正在读取知识库文件…</div>
+        </div>
+      </div>
+
+      <div class="set-group" id="group-plugins">
+        <h4>插件</h4>
+        <div class="set-row">
+          <span class="set-label">已装插件（即插即用）</span>
+          <button id="addPluginBtn" class="setting-btn">添加插件</button>
+          <button id="reloadPluginsBtn" class="setting-btn">刷新</button>
+        </div>
+        <div id="pluginList" class="plugin-list">未安装插件</div>
+      </div>
+
+      <div class="set-group">
+        <h4>外观</h4>
+        <div class="set-row">
+          <span class="set-label">主题颜色</span>
+          <div class="theme-swatches" id="themeSwatches"></div>
+          <input type="color" id="themeColorInput" value="#ec4899">
+        </div>
+        <div class="set-row">
+          <span class="set-label">字体大小</span>
+          <input type="range" id="fontScaleInput" min="0.8" max="1.4" step="0.05" value="1">
+          <span id="fontScaleValue" class="setting-value">100%</span>
+        </div>
+        <div class="set-row">
+          <span class="set-label">显示时间戳</span>
+          <label class="switch"><input type="checkbox" id="showTimestampSwitch"><span class="knob"></span></label>
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h4>声音</h4>
+        <div class="set-row">
+          <span class="set-label">消息提醒音效</span>
+          <label class="switch"><input type="checkbox" id="soundSwitch"><span class="knob"></span></label>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/js/app.js"></script>
+</body>
+</html>

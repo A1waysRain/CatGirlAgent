@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>猫娘手机接入</title>
+  <style>
+    :root { --primary: #ec4899; --ink: #302333; --paper: #fff8fb; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; color: var(--ink); background: #fde7f1; font-family: "Microsoft YaHei", sans-serif; }
+    main { width: min(100%, 360px); background: var(--paper); border: 1px solid #f6bfd7; border-radius: 8px; padding: 28px 24px; box-shadow: 0 12px 35px #b56d8f33; }
+    h1 { margin: 0 0 8px; font-size: 23px; } p { margin: 0 0 22px; color: #765b6b; font-size: 14px; line-height: 1.7; }
+    input, button { width: 100%; min-height: 44px; border-radius: 6px; font: inherit; }
+    input { border: 1px solid #e7a8c4; background: #fff; padding: 0 12px; outline-color: var(--primary); }
+    button { border: 0; margin-top: 12px; background: var(--primary); color: #fff; font-weight: 700; } #error { min-height: 20px; margin-top: 10px; color: #c41d5d; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>猫娘手机接入</h1>
+    <p>在电脑“手机接入”面板中查看令牌，输入一次后即可继续聊天。</p>
+    <form id="loginForm"><input id="token" autocomplete="off" placeholder="输入接入令牌" required><button type="submit">进入猫娘</button></form>
+    <div id="error" role="alert"></div>
+  </main>
+  <script>
+    document.getElementById("loginForm").addEventListener("submit", async function (event) {
+      event.preventDefault(); const error = document.getElementById("error"); error.textContent = "";
+      const response = await fetch("/api/lan/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: document.getElementById("token").value }) });
+      if (response.ok) location.replace("/m"); else error.textContent = "令牌不正确，请回电脑确认。";
+    });
+  </script>
+</body>
+</html>

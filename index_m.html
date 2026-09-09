@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>猫娘来咯</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/mobile.css">
+</head>
+<body class="mobile-body">
+  <main class="mobile-app">
+    <header class="mobile-head">
+      <button id="sessionsButton" class="mobile-icon" aria-label="切换会话">☰</button>
+      <div><strong id="title">猫娘</strong><small id="subtitle">手机接入</small></div>
+      <button id="newButton" class="mobile-icon" aria-label="新建会话">＋</button>
+    </header>
+    <aside id="sessionsPanel" class="mobile-sessions" hidden><div id="sessionsList"></div></aside>
+    <section id="chat" class="mobile-chat" aria-live="polite"></section>
+    <form id="composer" class="mobile-composer">
+      <textarea id="input" rows="1" maxlength="6000" placeholder="和猫娘说点什么…"></textarea>
+      <button id="send" type="submit">发送</button>
+    </form>
+  </main>
+  <script src="/js/app_m.js"></script>
+</body>
+</html>

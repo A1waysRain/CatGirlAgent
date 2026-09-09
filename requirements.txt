@@ -1,0 +1,29 @@
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+httpx>=0.25.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+
+# 桌面壳（内嵌 WebView2 窗口）
+pywebview>=6.0.0
+
+# 桌面宠物（形象缩放/帧处理）
+Pillow>=10.0.0
+
+# 系统托盘图标（关闭窗口最小化到托盘）
+pystray>=0.19.0
+
+# 文档读写/修改（Word/Excel/PPT；透明分发进 read_file/append_file/replace_in_file + format_docx）
+python-docx>=1.1
+openpyxl>=3.1
+python-pptx>=1.0
+
+# 图片识别 OCR（rapidocr-onnxruntime，含 opencv/numpy/onnxruntime；打包进 exe 供图片识别插件用）
+rapidocr-onnxruntime>=1.2
+
+# RAG 知识库检索（本地 embedding，bge-small-zh；onnxruntime 复用上面的，不新增原生库）
+fastembed>=0.5
+
+# 打包成单文件 exe 时才需要
+pyinstaller>=6.0.0

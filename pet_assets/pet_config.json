@@ -1,0 +1,21 @@
+{
+  "idle": ["笑.png"],
+  "notify": [],
+  "click": [],
+  "scale": 0.8,
+  "bubble_dy": -50,
+  "float": false,
+  "moods": {
+    "happy":     ["笑.png"],
+    "sad":       ["哭唧唧.png"],
+    "sleep":     ["困.png"],
+    "excited":   ["惊讶.png"],
+    "alert":     ["慌张.png"],
+    "angry":     ["吓.png"],
+    "tease":     ["吐舌头.png"],
+    "reluctant": ["不要啊.png"],
+    "tsundere":  ["拽.png"],
+    "think":     ["思考.png"]
+  },
+  "dock": {"enabled": true, "margin": 8, "peek": 48}
+}
