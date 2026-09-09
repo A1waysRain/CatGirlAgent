@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-猫娘来咯：桌面壳 + 网页前端 + FastAPI 后端 三层架构的 DeepSeek 猫娘桌面助手。开发/验证/打包命令都在本目录（`Cat_Girl/`）执行。无 git 仓库。
+猫娘来咯：桌面壳 + 网页前端 + FastAPI 后端 三层架构的 DeepSeek 猫娘桌面助手。开发/验证/打包命令都在本目录（`Cat_Girl/`）执行。已 git 管理（2026-09-09，私有 GitHub `A1waysRain/CatGirl`）。
 
 ## 常用命令
 
@@ -16,12 +16,13 @@ pythonw desktop\app.py
 # 只用后端（浏览器访问 http://127.0.0.1:8000）
 .venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
-# 验证/回归：`_verify_*.py` 是一个主题一个验证脚本（部分要 Playwright + msedge）
-PYTHONIOENCODING=utf-8 .venv\Scripts\python.exe _verify_frontend.py     # 前端端到端（真后端+mock SSE，不耗 DeepSeek token）
-PYTHONIOENCODING=utf-8 .venv\Scripts\python.exe _verify_chat_fixes.py   # chat 确定性兜底/regenerate 加固
-PYTHONIOENCODING=utf-8 .venv\Scripts\python.exe _verify_doc_lineref.py  # 教材《流式输出-大白话对号猫娘》行号核对
-# 常用：_verify_compress（上下文压缩）/ _verify_alarms(+_date)（提醒）/ _verify_launch_detect（打开应用）/
-#       _verify_write_claim（写文件声称审计）/ _verify_dock / _verify_mood_timeout（桌宠）
+# 验证/回归：脚本在 `tests/`（`_verify_*.py` 一主题一脚本，部分要 Playwright + msedge）。
+# 从本目录跑必须 PYTHONPATH 指项目根（cmd 用 %CD%，git-bash 用 $(pwd)）：
+PYTHONIOENCODING=utf-8 PYTHONPATH="%CD%" .venv\Scripts\python.exe tests\_verify_frontend.py     # 前端端到端（真后端+mock SSE，不耗 DeepSeek token）
+PYTHONIOENCODING=utf-8 PYTHONPATH="%CD%" .venv\Scripts\python.exe tests\_verify_chat_fixes.py   # chat 确定性兜底/regenerate 加固
+PYTHONIOENCODING=utf-8 PYTHONPATH="%CD%" .venv\Scripts\python.exe tests\_verify_doc_lineref.py  # 教材《流式输出-大白话对号猫娘》行号核对
+# 常用：tests/_verify_compress（上下文压缩）/ tests/_verify_alarms(+_date)（提醒）/ tests/_verify_launch_detect（打开应用）/
+#       tests/_verify_write_claim（写文件声称审计）/ tests/_verify_dock / tests/_verify_mood_timeout（桌宠）
 # `_e2e_*.py` 消耗真实 DeepSeek token（端到端）；`_smoke_pkg.py` 冒烟打包版 exe
 
 # 语法检查
@@ -62,5 +63,5 @@ desktop/app.py（pywebview 壳）
 - **WebView2 启动竞态**：app.py 里那组 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`（--disable-gpu + 3 个 --disable-backgrounding-*）已**注释禁用**——它显著加剧"启动后窗口在屏外/未 resize"的一次性竞态，别随便重新启用。
 - 中文 exe 名 OK（PyInstaller 6.22 直接生成正确文件名，终端里乱码只是 GBK 显示问题）。
 - build.spec：所有路径用 `SPECPATH`/项目根拼绝对路径；**不能 exclude tkinter**（桌宠窗口依赖）；`backend/maa_ops/worker.py` 是非 import 引用必须显式打进 datas；`--noconfirm` 不会清空 dist 子目录。
-- 教材在上级目录 `资料\`（流式输出/教学文档，行号与代码对应；改代码后跑 `_verify_doc_lineref.py` 核对行号）。
-- 上级目录还有：`项目介绍.md`（能力总览）、`施工方向\`（方案 + 完成归档）、`更新日志-2026-09-05.md`（根目录，全量迭代史）、`换设备声明\`（换电脑部署说明）。根目录有 `CLAUDE.md` 总述各文件夹。
+- 教材在上级目录 `资料\`（流式输出/教学文档，行号与代码对应；改代码后跑 `tests/_verify_doc_lineref.py` 核对行号）。
+- 上级目录还有：`项目介绍.md`（能力总览）、`施工方向\`（方案 + 完成归档）、`更新日志-2026-09-09.md`（根目录，全量迭代史）、`换设备声明\`（换电脑部署说明）。根目录有 `CLAUDE.md` 总述各文件夹。
