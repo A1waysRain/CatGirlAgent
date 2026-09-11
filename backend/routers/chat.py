@@ -281,7 +281,10 @@ def _extract_alarm_request(text: str) -> dict | None:
         repeat = "daily"
     date = None
     if repeat == "once":
-        date = _extract_date(t)
+        # 日期只在「时间表达区」里找——必须把提醒内容（msg 组）那段摘掉再扫。
+        # 否则「待会四点十分提醒我打明日方舟」里的「明日」（游戏名）会被当成"明天"，
+        # 把当天 16:10 的提醒建到第二天。
+        date = _extract_date(t[: m.start("msg")] + t[m.end("msg"):])
         if not date:
             # 没写明确日期：今天该时刻，已过就推到明天
             dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)

@@ -158,6 +158,20 @@ ok &= check("每天不带日期", bool(g) and g["repeat"] == "daily" and g["date
 g = F("19点提醒我吃饭")
 ok &= check("裸19点→今天19:00", bool(g) and g["time"] == "19:00" and g["date"] == "2026-08-19", str(g))
 
+# ---- 6. 提醒内容里的"日期词"不算日期（回归：2026-09-11 真实 bug） ----
+# 「待会四点十分提醒我打明日方舟」的「明日」是游戏名，曾被 _extract_date 当成"明天"，
+# 把当天 16:10 的提醒建到了 09-12。日期只该来自时间表达区。
+set_parse_now(datetime.datetime(2026, 9, 11, 13, 42, 0))
+g = F("待会四点十分提醒我打明日方舟")
+ok &= check("明日方舟不当作明天", bool(g) and g["time"] == "16:10" and g["date"] == "2026-09-11", str(g))
+g = F("提醒我三点打明日之后")
+ok &= check("明日之后不当作明天", bool(g) and g["time"] == "15:00" and g["date"] == "2026-09-11", str(g))
+g = F("八点提醒我看明日方舟比赛")           # 08:00 已过 → 明天，靠"已过推明天"兜底而非"明日"
+ok &= check("明日方舟+已过时间→明天", bool(g) and g["time"] == "08:00" and g["date"] == "2026-09-12", str(g))
+# 真写在时间表达区的日期仍然生效
+g = F("明天八点提醒我打明日方舟")
+ok &= check("前面写了明天仍生效", bool(g) and g["time"] == "08:00" and g["date"] == "2026-09-12", str(g))
+
 for d in _tmp_dirs:
     shutil.rmtree(d, ignore_errors=True)
 print("ALL PASS" if ok else "HAS FAILURES")
