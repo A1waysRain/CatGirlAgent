@@ -12,7 +12,7 @@ from ..scheduler import scheduler
 from ..schemas import ChatRequest
 from ..sessions import (
     append_message as session_append,
-    find_alarm_batch_for_request,
+    find_alarm_batches_for_request,
     find_recent_media_for_alarm_request,
     get_current,
     get_session,
@@ -465,13 +465,15 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     recent = _annotate_recent_dates(recent_messages(user_msgs, for_model=True))
     # 赛程图片/文件已在前一轮被结构化暂存后，主人可只说“设置西班牙”；此处按
     # 会话批次确定性创建，避免把自然语言上下文再次交给模型拼工具参数。
-    alarm_batch = find_alarm_batch_for_request(sid, request.chatmassage)
-    media_backfill = None if alarm_batch else find_recent_media_for_alarm_request(sid, request.chatmassage)
+    alarm_batches = find_alarm_batches_for_request(sid, request.chatmassage)
+    media_backfill = None if alarm_batches else find_recent_media_for_alarm_request(sid, request.chatmassage)
     batch_created: list[dict] = []
     batch_errors: list[dict] = []
-    if alarm_batch:
-        batch_created, batch_errors = scheduler.add_alarms_batch(alarm_batch.get("alarms") or [])
-        mark_alarm_batch_applied(sid, alarm_batch["id"], [a["id"] for a in batch_created])
+    for batch in alarm_batches:
+        created, errors = scheduler.add_alarms_batch(batch.get("alarms") or [])
+        batch_created.extend(created)
+        batch_errors.extend(errors)
+        mark_alarm_batch_applied(sid, batch["id"], [a["id"] for a in created])
     # 联网搜索：显式「搜/搜索/查」命令 → 确定性直接开浏览器，不依赖模型自觉调工具
     # （模型曾空口说"已打开搜索页"却没调用工具导致浏览器没弹，这里兜底）
     opened_search = False
@@ -541,7 +543,8 @@ async def chat(request: ChatRequest) -> StreamingResponse:
             f"可回溯原料路径是「{media_backfill['path']}」。{instruction}"
             "只按工具真实返回汇报，不能把旧聊天文字当作已创建事实。"
         )})
-    if alarm_batch:
+    if alarm_batches:
+        batch_labels = "、".join(str(b.get("label") or "").strip() for b in alarm_batches)
         existed = sum(1 for error in batch_errors if error.get("error") == "already_exists")
         failed = [error for error in batch_errors if error.get("error") != "already_exists"]
         details = []
@@ -553,7 +556,7 @@ async def chat(request: ChatRequest) -> StreamingResponse:
             details.append(f"{len(failed)} 条未创建：" + "；".join(str(e.get("error")) for e in failed))
         result = "；".join(details) or "没有可创建的提醒"
         msgs.insert(1, {"role": "system", "content": (
-            f"【系统通知，必须服从】主人刚才确认创建暂存赛程「{alarm_batch['label']}」。"
+            f"【系统通知，必须服从】主人刚才确认创建暂存赛程「{batch_labels}」。"
             f"系统已真实处理：新建 {len(batch_created)} 条，已存在 {existed} 条。结果：{result}。"
             "本轮只简短如实确认上述结果；绝不声称未列出的提醒已建好，绝不再调用 set_alarms_batch。"
         )})
@@ -643,7 +646,7 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     # 确定性后端分支没有走 llm.py 的工具循环，也要把真实执行类别交给
     # chat_service 标注生命周期；不记录参数/结果，真实状态仍各自从业务数据读取。
     tool_trace = []
-    if alarm_batch:
+    if alarm_batches:
         tool_trace.append("set_alarms_batch")
     elif alarm_created:
         tool_trace.append("set_alarm")

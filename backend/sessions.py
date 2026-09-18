@@ -536,6 +536,44 @@ def pin_latest_reference(sid: str) -> dict | None:
 
 # ---------- 待确认批量提醒（赛程/安排识别结果） ----------
 
+# 主人不复述赛事名、直接说“都设置/全部设上”时，把还没应用过的批次一次全给。
+# 必须与授权动词（设置/设上/挂上/创建/建立）同现才生效，见 find_alarm_batches_for_request。
+_BATCH_ALL_WORDS = ("都设", "都挂", "都建", "都创", "全都", "全部", "所有", "统统",
+                    "一并", "一起设", "两个都", "俩都", "每个都")
+# 带排除/否定措辞时整句交回模型，不做确定性创建：“除了巴林都设置”这类范围表达
+# 本函数表达不了，硬按具体赛事名建恰恰会建反（注：“只设置巴林”属收窄不属排除，
+# 走具体赛事名匹配即可，别加进这里）。
+_BATCH_EXCLUDE_WORDS = ("除了", "除开", "别设", "不要设", "不设", "先不设", "取消")
+
+
+def _two_plus_substrings(label: str) -> set[str]:
+    """赛事名本身 + 所有两字以上连续片段（主人只说“西班牙”也能命中“F1西班牙大奖赛”）。"""
+    text = (label or "").strip()
+    names = {text} if text else set()
+    for start in range(len(text)):
+        for end in range(start + 2, len(text) + 1):
+            names.add(text[start:end])
+    return names
+
+
+def _batch_all_requested(request: str) -> bool:
+    """是否用“都设置/全部设上”这类措辞授权（带排除词时不算）。"""
+    if any(word in request for word in _BATCH_EXCLUDE_WORDS):
+        return False
+    return any(word in request for word in _BATCH_ALL_WORDS)
+
+
+def _batch_all_positions(request: str) -> list[int]:
+    """泛指词在句中的结束位置，用来判断“都”是泛指全部还是列举全部。"""
+    positions = []
+    for word in _BATCH_ALL_WORDS:
+        start = request.find(word)
+        while start != -1:
+            positions.append(start + len(word))
+            start = request.find(word, start + 1)
+    return positions
+
+
 def _prune_alarm_context(session: dict, now: float | None = None) -> bool:
     """清理已过期的图片意图、原料和未确认批次；返回是否发生修改。"""
     now = now or time.time()
@@ -661,35 +699,56 @@ def stage_alarm_batch(sid: str, label: str, alarms: list[dict]) -> dict:
         return dict(batch)
 
 
-def find_alarm_batch_for_request(sid: str, text: str) -> dict | None:
-    """从主人明确的“设置某赛事”请求中匹配唯一的已暂存批次。"""
+def find_alarm_batches_for_request(sid: str, text: str) -> list[dict]:
+    """从主人明确的“设置某赛事/都设置”请求里，取出所有该创建的已暂存批次。
+
+    返回 0 个（没授权或没命中）、1 个或多个：主人一句里点名多个赛事、或用
+    “都设置”泛指时一次全给，交由调用方逐个确定性创建。旧实现只在恰好命中
+    一个批次时才返回，主人说“都设置”却没复述赛事名时其余批次会被永久搁置。
+    """
     request = (text or "").strip()
     if not request or not any(word in request for word in ("设置", "设上", "挂上", "创建", "建立")):
-        return None
+        return []
+    # 否定/范围排除措辞（不设、别设、取消、除了…）一律不接管，交回模型按上下文处理
+    if any(word in request for word in _BATCH_EXCLUDE_WORDS):
+        return []
     with _lock:
         index = _ensure_index()
         session = _load_session(sid) or _load_session(index["current"])
         changed = _prune_alarm_context(session)
-        matches = []
-        for batch in session.get("pending_alarm_batches", []):
-            label = str(batch.get("label") or "").strip()
+        batches = [b for b in session.get("pending_alarm_batches", []) if isinstance(b, dict)]
+        labels = [str(b.get("label") or "").strip() for b in batches]
+        # “大奖赛”这类两个批次共有的片段不能当识别依据，否则“设置巴林大奖赛”
+        # 会连阿塞拜疆一起命中；先把各批次名称片段的两两交集算出来再排除。
+        shared: set[str] = set()
+        for i, left in enumerate(labels):
+            left_aliases = _two_plus_substrings(left)
+            for right in labels[i + 1:]:
+                shared |= left_aliases & _two_plus_substrings(right)
+        matches: list[dict] = []
+        hits_all: set[str] = set()
+        for batch, label in zip(batches, labels):
             # 允许主人只说“西班牙”，但至少要命中赛事名中的一个两字以上片段。
-            aliases = {label}
-            for start in range(len(label)):
-                for end in range(start + 2, len(label) + 1):
-                    aliases.add(label[start:end])
-            hits = [name for name in aliases if name and name in request]
+            hits = [name for name in (_two_plus_substrings(label) - shared)
+                    if name and name in request]
             if not hits:
                 continue
-            hit = max(hits, key=len)
-            around = request[max(0, request.find(hit) - 8): request.find(hit) + len(hit) + 8]
-            if any(neg in around for neg in ("不设置", "先不设", "别设置", "不要设置", "取消")):
-                continue
             matches.append(batch)
+            hits_all.update(hits)
+        if _batch_all_requested(request):
+            # 看“都”前面有没有列举过赛事名：“把阿塞拜疆和巴林都设置上”的“都”只覆盖
+            # 列举的那些；前面没提名字（“都设置，巴林的排位赛在10月3号下午4点”）才是
+            # 全部未应用批次——线上正是这句，旧实现只建了命中的巴林、阿塞拜疆被搁置。
+            covered = any(name in request[:pos]
+                          for pos in _batch_all_positions(request) for name in hits_all)
+            if not covered:
+                listed = {id(b) for b in matches}
+                matches.extend(b for b in batches
+                               if not b.get("applied_alarm_ids") and id(b) not in listed)
         if changed:
             session["updated_at"] = time.time()
             _save_session(session)
-        return dict(matches[0]) if len(matches) == 1 else None
+        return [dict(b) for b in matches]
 
 
 def mark_alarm_batch_applied(sid: str, batch_id: str, alarm_ids: list[str]) -> None:
