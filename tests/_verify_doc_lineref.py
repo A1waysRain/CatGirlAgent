@@ -13,15 +13,18 @@ import sys
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-# 默认扫的两份主教材（在 Cat_Girl/ 目录下运行，路径相对它）
+# 测试脚本在 Cat_Girl/tests/，教材在仓库根目录资料/；使用跨平台路径，
+# 不再把 Windows 反斜杠当成 Linux 文件名。
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.dirname(HERE)
 DEFAULT_MDS = [
-    r"..\资料\2.流式输出streaming+SSE\流式输出-大白话对号猫娘.md",
-    r"..\资料\4.RAG检索增强生成\RAG-大白话对号猫娘.md",
+    os.path.join(REPO_ROOT, "资料", "2.流式输出streaming+SSE", "流式输出-大白话对号猫娘.md"),
+    os.path.join(REPO_ROOT, "资料", "4.RAG检索增强生成", "RAG-大白话对号猫娘.md"),
 ]
 # --all 时追加的教材
 ALL_MDS = [
-    r"..\资料\3.LangChain和LangGraph\LangChain和LangGraph-大白话对号猫娘.md",
-    r"..\资料\1.FastAPI+Python异步\FastAPI与Python异步-大白话对号猫娘.md",
+    os.path.join(REPO_ROOT, "资料", "3.LangChain和LangGraph", "LangChain和LangGraph-大白话对号猫娘.md"),
+    os.path.join(REPO_ROOT, "资料", "1.FastAPI+Python异步", "FastAPI与Python异步-大白话对号猫娘.md"),
 ]
 
 
@@ -47,7 +50,7 @@ def check(md: str):
     for f, ln in REF_RE.findall(content):
         ln = int(ln)
         try:
-            lines = open(resolve(f), encoding="utf-8").read().splitlines()
+            lines = open(os.path.join(HERE, resolve(f)), encoding="utf-8").read().splitlines()
         except FileNotFoundError:
             problems.append(f"{f}:{ln}  FILE_NOT_FOUND（{resolve(f)}）")
             continue
