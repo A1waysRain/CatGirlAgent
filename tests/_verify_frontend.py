@@ -162,7 +162,7 @@ def main():
                     {"type": "meta",
                      "session": {"id": body.get("session_id"), "title": "测试会话"},
                      "message_ids": {"user": "mock-user-1"}},
-                    {"type": "delta", "text": "（验证回复）收到喵～"},
+                    {"type": "delta", "text": "（验证回复）收到喵～\n## 小标题\n- 第一项\n- 第二项\n**加粗**"},
                     {"type": "delta", "text": "测试通过啦"},
                     {"type": "done", "message_ids": {"assistant": "mock-bot-1"}},
                 ]))
@@ -231,6 +231,21 @@ def main():
             }""")
             assert user_del and last["del"] and last["regen"], "用户/猫娘消息操作钮缺失"
             print(f"[4] 发送 OK | 消息={msgs} 计数={meta} 用户有删除钮={user_del} 猫娘有删除+重生成钮={last}")
+
+            # ---- 4b. markdown 呈现（## 与小标题、- 与圆点）----
+            # 起因：猫娘在长清单里用 `## 小标题` 和 `- 列表项`，而 formatBotMessage 原来只认
+            # `（动作）` 与 `**加粗**` → 主人屏幕上看到字面的 "## " 和 "- "，观感很差。
+            md = page.evaluate("""() => {
+                const b = [...document.querySelectorAll('.message')].pop().querySelector('.msg-bubble');
+                return { text: b.innerText, html: b.innerHTML,
+                         heading: !!b.querySelector('strong') &&
+                                  b.querySelector('strong').textContent.includes('小标题') };
+            }""")
+            assert "##" not in md["text"], f"`##` 不应裸露给主人: {md['text'][:80]}"
+            assert "\n- " not in md["text"] and "• 第一项" in md["text"], f"列表项应转成圆点: {md['text'][:120]}"
+            assert md["heading"], "行首 # 标题应被渲染成加粗"
+            assert "<strong>加粗</strong>" in md["html"], "**加粗** 应仍生效"
+            print("[4b] markdown 呈现 OK | `##`→加粗、`- `→圆点、`**`→strong 全生效")
 
             # ---- 5. 重新生成（mock） ----
             before = page.evaluate("() => [...document.querySelectorAll('.message')].pop().querySelector('.msg-bubble').innerText")
@@ -598,6 +613,34 @@ def main():
             })""")
             assert "还没有可管理的保留项喵" in c4["text"], f"移除后应回空态: {c4['text']}"
             print("[17] 上下文保留项 OK | 默认收起→展开空态→种子出现(暂存)→固定(长期)→移除回空 全过")
+
+            # ---- 18. 联网搜索开关 + 免责小字（2026-09-27 新增） ----
+            assert page.evaluate("document.getElementById('settingsOverlay').classList.contains('open')"), \
+                "设置浮层应仍开着"
+            sw = page.evaluate("""() => {
+                const box = document.getElementById('searchBrowserSwitch');
+                const group = document.getElementById('group-search');
+                return { has: !!box, checked: box && box.checked,
+                         groupText: group ? group.textContent : '' };
+            }""")
+            assert sw["has"], "缺少 searchBrowserSwitch 开关"
+            assert sw["checked"] is True, "默认应为开（保持原有弹窗行为）"
+            assert "不保证准确" in sw["groupText"] and "联网搜索" in sw["groupText"], \
+                f"设置里应有搜索免责小字: {sw['groupText'][:80]}"
+            # 真实往返：关掉 → PUT 落盘 → 再读设置确认 false
+            # 注意：`.switch input` 是 opacity:0/0×0 的隐藏输入框，Playwright 点不到，
+            # 必须点它外面的 label（.switch 本身），click 会转发给 input 并触发 change
+            page.click("#group-search label.switch")
+            page.wait_for_timeout(600)
+            saved = page.evaluate("""async () => (await (await fetch('/api/settings')).json()).search_open_browser""")
+            assert saved is False, f"关掉后应落盘为 false: {saved}"
+            assert page.evaluate("document.getElementById('searchBrowserSwitch').checked") is False, \
+                "关掉后勾选态应保持"
+            page.click("#group-search label.switch")     # 恢复默认，避免影响后续
+            page.wait_for_timeout(600)
+            restored = page.evaluate("""async () => (await (await fetch('/api/settings')).json()).search_open_browser""")
+            assert restored is True, f"应能再打开: {restored}"
+            print("[18] 联网搜索开关 OK | 默认开→关(落盘 false)→开(true)，免责小字在位")
 
             browser.close()
     finally:

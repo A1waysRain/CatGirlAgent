@@ -37,6 +37,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from .config import settings
+from .settings import load_settings
 
 TEXT_EXT = {
     ".txt", ".md", ".log", ".py", ".json", ".yaml", ".yml",
@@ -1635,6 +1636,14 @@ def tool_web_search(query: str, num: int = 5) -> str:
     query = (query or "").strip()
     if not query:
         return "喵，想搜点什么呀？告诉本喵关键词喵~"
+    # 主人可在设置里关掉「搜索时弹出浏览器」（开关也管这个工具，否则模型仍会弹窗）
+    try:
+        if not load_settings().get("search_open_browser", True):
+            return ("主人把「搜索时弹出浏览器」关掉了，本喵没打开浏览器。"
+                    "要查当前事实请改用 verify_current_fact（它能读到网页正文），"
+                    "也别再调 open_url；如实告诉主人没弹窗即可喵。")
+    except Exception:
+        pass
     url = "https://cn.bing.com/search?q=" + urllib.parse.quote(query)
     try:
         _open_and_focus(url)
@@ -1701,6 +1710,10 @@ class _FactTextParser(HTMLParser):
 _FACT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 _FACT_MIN_EXTRACT = 400     # 正文短于此视为没真读到内容（空壳页 / JS 墙 / 登录墙）
+# 报告里每条来源保留多少正文字符。★这是"完整赛程能不能拼全"的直接决定项：
+# 实测 3000 字时，官网赛历页只读到 R1-R8 与 R15-R18（缺口里明写了"第9-14、19-24站未覆盖"），
+# f1-boxbox 也在第 15 站处被截断。2026-09-27 主人拍板"质量优先"后抬到 8000。
+_FACT_REPORT_EXTRACT_CHARS = 8000
 _FACT_MIN_SNIPPET = 20      # 搜索摘要短于此视为没信息量
 _FACT_STALE_DAYS = 365      # 来源发布时间超过它就提示可能过时
 _FACT_MAX_PER_DOMAIN = 2    # 同域名最多读几篇——verified 要的是独立域名，同域堆再多也没用
@@ -1720,6 +1733,31 @@ _FACT_FRESHNESS_ALIAS = {
     "historical": "current", "any": "current",
     "pd": "day", "pw": "week", "pm": "month", "py": "year",
 }
+
+
+_CJK = "一-鿿"
+# 三种"粘连"要拆：CJK→ASCII、ASCII→CJK、**数字→字母**（「2026F1」→「2026 F1」）。
+# 最后一条只单向：字母→数字**不拆**，否则 `F1` 会被拆成 `F 1`（那是型号名，拆了就废了）。
+_CJK_GLUE = re.compile(
+    rf"(?<=[{_CJK}])(?=[A-Za-z0-9])|(?<=[A-Za-z0-9])(?=[{_CJK}])|(?<=\d)(?=[A-Za-z])")
+
+
+def _normalize_query(query: str) -> str:
+    """把中日韩文字与英文/数字之间补上空格的检索用查询。
+
+    ★实测（2026-09-27）主人输入「2026F1赛历」（**没空格**）时质量崩塌：
+        「2026F1赛历」 → insufficient，只有 1 个 full，且那条是 474 天前的旧稿 → 回复"全是旧稿"
+        「2026 F1 赛历」→ verified，3 个 full，全是 1 天前
+    两层伤害：① 粘在一起的 `2026F1` 让搜索引擎召回变差；
+    ② `_fact_terms` 会把粘连串当成一个词元 `2026f1`，而网页写的是「2026 F1」→
+       相关度判定判成"相关性低" → **新鲜来源全被降级成 snippet，只剩旧稿是 full**。
+    所以检索与判级**都必须用规范化后的查询**。
+    """
+    q = (query or "").strip()
+    if not q:
+        return q
+    q = _CJK_GLUE.sub(" ", q)
+    return re.sub(r"\s{2,}", " ", q).strip()
 
 
 def _fact_terms(query: str) -> list[str]:
@@ -1944,9 +1982,22 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
     max_sources = max(2, min(int(max_sources or 5), 8))
     fresh_key, _, _ = _fact_freshness(freshness)
     wanted = {str(d).lower().strip().lstrip("www.") for d in (domains or []) if str(d).strip()}
-    mk = _fact_market(query)
+    # 「2026F1赛历」这类粘连写法必须规范化后再检索+判级，否则召回差、且新鲜来源会被误判"相关性低"
+    search_q = _normalize_query(query)
+    mk = _fact_market(search_q)
     mkt, lang = mk["market"], mk["lang"]
-    raw_results = _fact_search(query, max_sources * 2, fresh_key)
+    raw_results = _fact_search(search_q, max_sources * 2, fresh_key)
+    # ★时效性：抓取前先按发布时间排序，让**新鲜来源先占名额**、旧稿排到最后。
+    # 服务端没有时效过滤可用——Bing RSS 实测**完全不认** `freshness`（Day/Week/Month
+    # 与老式 `filters=ex1:"ez1"` 五种写法返回字节相同的结果），所以只能客户端自己排。
+    # 排序只决定"谁先被读到"，旧稿仍会被读到（名额有剩时），不做丢弃。
+    def _freshness_key(item: dict) -> tuple:
+        age = _fact_age_days(item.get("published", "") or "")
+        if age is None:
+            return (1, 0)                                   # 无发布时间：排在新鲜之后、旧稿之前
+        return (2, 0) if age > _FACT_STALE_DAYS else (0, age)   # 0=新鲜(按天数升序) 2=旧稿
+
+    raw_results = sorted(raw_results, key=_freshness_key)
     sources = []
     full_domains_now: set[str] = set()
     per_domain: dict[str, int] = {}
@@ -1963,13 +2014,13 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
             continue
         per_domain[host] = per_domain.get(host, 0) + 1
         text, error = _fact_fetch(url, lang)
-        grade, reasons = _grade_source(item, text, error, query)
+        grade, reasons = _grade_source(item, text, error, search_q)
         published = item.get("published", "")
         sources.append({
             "title": item.get("title", ""), "url": url, "domain": host,
             "published": published, "age_days": _fact_age_days(published),
             "snippet": item.get("snippet", "")[:1200],
-            "extract": text[:3000], "grade": grade, "grade_reasons": reasons,
+            "extract": text[:_FACT_REPORT_EXTRACT_CHARS], "grade": grade, "grade_reasons": reasons,
             "read_error": error,
         })
         if grade == "full" and host:
@@ -2021,6 +2072,78 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
     _log(f"verify_current_fact query={query[:80]!r} status={status} "
          f"full={len(full)}/{len(sources)} elapsed={result['elapsed_s']}s")
     return json.dumps(result, ensure_ascii=False)
+
+
+# 证据段长度预算（2026-09-27 实测教训：单条 full 只给 400 字时，24 站的 F1 赛历
+# 会被截在中间，猫娘于是只讲了前十几站——主人反馈"赛历少了一半"）
+_FACT_BRIEF_FULL_CHARS = 1500   # 单条 full 正文上限
+_FACT_BRIEF_SNIP_CHARS = 250    # 单条搜索摘要上限
+_FACT_BRIEF_LIMIT = 6000        # 整段上限（含头部状态行与末尾限制行）
+
+
+def fact_brief(query: str, max_sources: int = 4, limit: int = _FACT_BRIEF_LIMIT) -> str:
+    """把一次事实核验压成模型可直接阅读的证据段；读不到正文返回空串。
+
+    预算规则：**头部状态行与末尾「限制」行一定保住**（模型靠它们判断证据强弱与时效），
+    先给限制行留位，剩下的额度按来源顺序填正文；单条超长就截断**并标注**
+    "本条过长已截断"——让模型知道这条没看全，而不是把半截内容当完整结论讲。
+    """
+    try:
+        report = json.loads(tool_verify_current_fact(query, max_sources=max_sources))
+        if not isinstance(report, dict) or report.get("status") == "failed":
+            return ""
+        evidence = report.get("evidence") or {}
+        # ★没有任何 full 档证据 = 实际没读到正文，必须返回空串走"没读到"降级，
+        # 绝不能把搜索摘要递给模型——实测它会拿无关摘要当真内容讲
+        # （「2027年F1赛历」的查询曾讲出"考研"，来源就是一条无关摘要）。
+        if not evidence.get("full"):
+            return ""
+
+        head = ("核验状态={status}；置信度={confidence}；市场={market}；核验时间={checked_at}；"
+                "正文证据={full}条/独立来源={independent_domains}个").format(
+            status=report.get("status", "unknown"), confidence=report.get("confidence", "unknown"),
+            market=report.get("market", ""), checked_at=report.get("checked_at", ""),
+            full=evidence.get("full", 0), independent_domains=evidence.get("independent_domains", 0))
+
+        caveats = report.get("caveats") or []
+        tail = ("限制：" + "；".join(str(c) for c in caveats[:3])) if caveats else ""
+
+        # 先给头部和限制行留位，余下额度按顺序填来源
+        budget = max(600, int(limit) - len(head) - len(tail) - 8)
+        marker = "…（本条过长已截断）"
+        body: list[str] = []
+        used = 0
+        for source in report.get("sources") or []:
+            grade = source.get("grade", "none")
+            if grade not in ("full", "snippet"):
+                continue
+            raw = source.get("extract") if grade == "full" else source.get("snippet")
+            text = " ".join(str(raw or "").split())
+            if not text:
+                continue
+            age = source.get("age_days")
+            prefix = "[{g}] {d}（{p}{a}）：".format(
+                g="full" if grade == "full" else "snippet,未读到正文",
+                d=source.get("domain") or "未知来源",
+                p=source.get("published") or "无发布时间",
+                a=f"，约{age}天前" if isinstance(age, int) else "")
+            cap = _FACT_BRIEF_FULL_CHARS if grade == "full" else _FACT_BRIEF_SNIP_CHARS
+            room = budget - used - len(prefix) - 1
+            if room < 80:              # 剩不下有意义的一行就收手，别再塞半句话
+                break
+            keep = min(cap, room)
+            if len(text) > keep:
+                text = text[:max(1, keep - len(marker))] + marker
+            body.append(prefix + text)
+            used += len(prefix) + len(text) + 1
+
+        parts = [head] + body
+        if tail:
+            parts.append(tail)
+        return "\n".join(parts)
+    except Exception as exc:
+        _log(f"fact_brief failed {type(exc).__name__}")
+        return ""
 
 
 def tool_list_plugins() -> str:

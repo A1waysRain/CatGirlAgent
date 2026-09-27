@@ -118,6 +118,14 @@ chat_mod.current_time_hint = lambda: "【现在时间】固定时间注记"
 # 打桩副作用函数：不真开浏览器/不真启动应用/不真建闹钟
 _real_open = chat_mod._open_search
 chat_mod._open_search = lambda *a, **k: "已为 xx 打开搜索页"
+_real_brief = chat_mod.fact_brief
+chat_mod.fact_brief = lambda query: "status=verified；example.com：F1 赛历正文要点"
+_real_verify_fact = chat_mod.tool_verify_current_fact
+chat_mod.tool_verify_current_fact = lambda query, **kwargs: '{"status":"verified","evidence":{"full":1,"independent_domains":1},"sources":[]}'
+_real_distill = chat_mod.distill_web
+async def _fake_distill(question, materials):
+    return {"points": ["F1 赛历正文要点"], "sources": [{"domain": "example.com", "published": "今天", "grade": "full"}], "gaps": [], "conflicts": [], "confidence": "medium"}
+chat_mod.distill_web = _fake_distill
 _real_auto = chat_mod._auto_launch_apps
 _auto = {"launched": ["原神"], "failed": []}          # 可切换：部分成功 / 全部失败
 chat_mod._auto_launch_apps = lambda names: (_auto["launched"], _auto["failed"])
@@ -153,6 +161,72 @@ async def run():
     c = await call_chat("搜一下原神新版本")                          # 只 search
     check("只 search：set_alarm 保留（不误摘）", "set_alarm" in c["tools"])
     check("只 search：web_search/open_url 移除", "web_search" not in c["tools"] and "open_url" not in c["tools"])
+    search_note = " ".join(m.get("content", "") for m in c["msgs"] if m["role"] == "system")
+    check("只 search：注入搜索摘要", "example.com" in search_note and "F1 赛历正文要点" in search_note)
+    check("只 search：核验工具已摘除", "verify_current_fact" not in c["tools"])
+
+    chat_mod.fact_brief = lambda query: ""
+    async def _failed_distill(question, materials):
+        raise RuntimeError("stub failure")
+    chat_mod.distill_web = _failed_distill
+    c = await call_chat("搜一下无法读取的网页")
+    search_note = " ".join(m.get("content", "") for m in c["msgs"] if m["role"] == "system")
+    check("搜索读不到正文时明确降级", "没能读到网页正文" in search_note)
+    chat_mod.fact_brief = _real_brief
+    chat_mod.distill_web = _real_distill
+
+    # ★设置项 search_open_browser=False：不弹浏览器，但照样读内容讲给主人
+    #   验证方式是"恢复真实的 _open_search、只打桩真正开窗的 _open_and_focus"，
+    #   这样一旦代码仍去开浏览器，opened 就会记到 URL，断言立刻失败。
+    opened: list = []
+    _real_open_and_focus = chat_mod._open_and_focus
+    _real_load_settings = chat_mod.load_settings
+    chat_mod._open_search = _real_open
+    chat_mod._open_and_focus = lambda url: opened.append(url)
+    chat_mod.load_settings = lambda: {"search_open_browser": False}
+    chat_mod.fact_brief = lambda query: "status=verified；example.com：F1 赛历正文要点"
+    # 提炼工人在上面的用例末尾已被恢复成真函数——这里必须重新打桩，
+    # 否则本段会真去联网提炼（既慢又让断言依赖真实内容）。
+    chat_mod.distill_web = _fake_distill
+
+    c = await call_chat("搜一下原神新版本")
+    search_note = " ".join(m.get("content", "") for m in c["msgs"] if m["role"] == "system")
+    check("关弹窗：确实没开浏览器", opened == [], str(opened))
+    check("关弹窗：仍然读内容并注入", "example.com" in search_note and "F1 赛历正文要点" in search_note)
+    check("关弹窗：禁止说“搜索页已打开”", "没有打开浏览器" in search_note and "绝不许说" in search_note)
+    check("关弹窗：搜索/核验工具仍摘除",
+          all(t not in c["tools"] for t in ("web_search", "open_url", "verify_current_fact")))
+
+    # B站搜 + 关弹窗：既没开浏览器也没有正文可读 → 如实说明，不许装作打开了
+    c = await call_chat("B站搜 原神")
+    search_note = " ".join(m.get("content", "") for m in c["msgs"] if m["role"] == "system")
+    check("关弹窗+B站搜：没开浏览器", opened == [], str(opened))
+    check("关弹窗+B站搜：如实说没结果可给", "既没打开浏览器" in search_note and "没读到网页正文" in search_note)
+
+    # 开弹窗时行为不变（回归）
+    chat_mod.load_settings = lambda: {"search_open_browser": True}
+    c = await call_chat("搜一下原神新版本")
+    search_note = " ".join(m.get("content", "") for m in c["msgs"] if m["role"] == "system")
+    check("开弹窗：恢复开浏览器", opened and "cn.bing.com" in opened[-1], str(opened))
+    check("开弹窗：提示主人看屏幕", "搜索页已打开" in search_note)
+
+    # 设置开关也管模型自己调的 web_search（否则模型仍会弹窗）
+    import backend.tools as _tools_mod
+    _real_tools_load = _tools_mod.load_settings
+    _tools_mod.load_settings = lambda: {"search_open_browser": False}
+    _opened2: list = []
+    _real_af2 = _tools_mod._open_and_focus
+    _tools_mod._open_and_focus = lambda url: _opened2.append(url)
+    ws = _tools_mod.tool_web_search("原神新版本")
+    check("关弹窗：web_search 工具不弹窗而是引导核验",
+          _opened2 == [] and "关掉了" in ws and "verify_current_fact" in ws)
+    _tools_mod._open_and_focus = _real_af2
+    _tools_mod.load_settings = _real_tools_load
+
+    chat_mod._open_and_focus = _real_open_and_focus
+    chat_mod.load_settings = _real_load_settings
+    chat_mod.fact_brief = _real_brief
+    chat_mod.distill_web = _real_distill
 
     c = await call_chat("打开原神，待会11点提醒我打游戏")            # alarm+launch 同时
     check("alarm+launch：set_alarm 保持移除", "set_alarm" not in c["tools"])
@@ -324,6 +398,9 @@ sess_router.stream_answer = None  # 清理 mock 引用
 
 # 恢复打桩
 chat_mod._open_search = _real_open
+chat_mod.fact_brief = _real_brief
+chat_mod.tool_verify_current_fact = _real_verify_fact
+chat_mod.distill_web = _real_distill
 chat_mod._auto_launch_apps = _real_auto
 chat_mod.scheduler.add_alarm = _real_add
 chat_mod.current_time_hint = _real_time_hint

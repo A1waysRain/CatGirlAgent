@@ -1,4 +1,5 @@
 """聊天 + 联网搜索路由（从 main.py 拆出，2026-08-16）。"""
+import json
 import re
 import urllib.parse
 from datetime import datetime, timedelta
@@ -9,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from ..chat_service import _sse, build_messages, current_time_hint, greeting_hint, stream_answer
 from ..config import settings
 from ..scheduler import scheduler
+from ..settings import load_settings
 from ..schemas import ChatRequest
 from ..sessions import (
     append_message as session_append,
@@ -27,10 +29,13 @@ from ..tools import (
     _fuzzy_app_match,
     _load_apps,
     _open_and_focus,
+    fact_brief,
+    tool_verify_current_fact,
     run_tool,
     tool_check_system,
     tool_web_search,
 )
+from ..agents import build_materials, distill_web, render_distill, stale_notice
 
 router = APIRouter(prefix="/api")
 
@@ -476,11 +481,14 @@ async def chat(request: ChatRequest) -> StreamingResponse:
         mark_alarm_batch_applied(sid, batch["id"], [a["id"] for a in created])
     # 联网搜索：显式「搜/搜索/查」命令 → 确定性直接开浏览器，不依赖模型自觉调工具
     # （模型曾空口说"已打开搜索页"却没调用工具导致浏览器没弹，这里兜底）
+    # 设置项 search_open_browser=False 时不开浏览器，但**照样读内容**（见下面的搜索分支）
     opened_search = False
     search_req = _extract_search_request(request.chatmassage)
+    prefer_browser = bool(load_settings().get("search_open_browser", True))
     if search_req:
         _platform, _query = search_req
-        opened_search = _open_search(_platform, _query) is not None
+        if prefer_browser:
+            opened_search = _open_search(_platform, _query) is not None
     # 定点提醒：显式「X点/十点半 提醒我做事」→ 后端确定性建提醒，不依赖模型自觉调
     # set_alarm（防止模型空口说"已设置"却没调工具，提醒从没建过）
     alarm_req = _extract_alarm_request(request.chatmassage)
@@ -586,18 +594,67 @@ async def chat(request: ChatRequest) -> StreamingResponse:
             ),
         })
         disabled_tools.update({"set_alarm", "get_time"})
-    if opened_search:
-        # 告诉模型浏览器已开、别重复开；同时摘掉会开浏览器的工具防止开两次
+    # 搜索命令已接管：开了浏览器，或主人关掉了弹窗（关掉时照样读内容，只是不给看页面）
+    if search_req and (opened_search or not prefer_browser):
+        # B站搜只开页面、没有正文可读；必应搜才读内容
+        digest = ""
+        if _platform == "bing":
+            try:
+                report = json.loads(tool_verify_current_fact(_query, max_sources=4))
+                # 材料要给"给人读"的紧凑格式：直接把 JSON 报告喂给工人会因噪音
+                # 喂胖思考量（实测材料 −48%、思考 −49%、耗时 46.4s→29.0s，且只有紧凑版能解析成功）
+                distilled = await distill_web(_query, build_materials(report))
+                # 全是旧稿时带上一句"没找到近期来源"，让主猫娘能如实交代而不是拿旧料当现状
+                digest = render_distill(distilled, notice=stale_notice(report))
+            except Exception:
+                # 子 agent 失败时保留原有可靠降级，不让搜索请求整体失败。
+                digest = fact_brief(_query)
+        if opened_search:
+            content = f"（联网搜索已自动完成：本喵已为「{_query}」打开了浏览器搜索页，主人能看到。）"
+            tell = "现在既告诉主人“搜索页已打开，注意看屏幕喵”，也把上面读到的要点用猫娘语气讲给主人听。"
+        else:
+            content = (
+                f"（联网搜索已自动完成：主人关掉了「搜索时弹出浏览器」，本次**没有打开浏览器**。）"
+                "**绝不许说“搜索页已打开”**（主人屏幕上什么都没有）。"
+            )
+            tell = "把上面读到的要点用猫娘语气讲给主人听。"
+        if digest:
+            content += (
+                "\n【系统已替你联网读到的内容，必须据此回答】\n" + digest +
+                "\n" + tell +
+                "不许编造上面没写的内容，不许声称读过上面没列的页面。"
+                "**时效性**：上面若出现「⚠️ 未找到近期来源」，必须如实告诉主人"
+                "「没找到近期资料、这类安排可能已经变了，以官方公告为准」，"
+                "绝不许把旧稿里的安排当现状讲；标了「旧稿」的要点也要说明它是旧说法。"
+                "**若上面有「完整列表」**：必须把它作为**一份完整的清单念给主人**——"
+                "保持原有顺序、**不许只挑前几站讲、不许按来源拆成几段**。"
+                "**呈现规矩（观感优先，务必遵守）**："
+                "① **列表放最前面**，冲突/缺口/时效这些说明**统一放到列表末尾的一小段**里，"
+                "绝不要把一大段警告铺在列表前面；"
+                "② 列表**一行一站，只写「站名 + 日期 + 赛道/城市 +（是否冲刺赛）」**；"
+                "来源域名、抓取时间、「（材料未覆盖）」「⚠️来源不一致」这类**内部标注不要挂进列表行**"
+                "（有争议的站在行末标一个 ⚠️ 就够，解释放末尾说明）；"
+                "③ 末尾说明只讲**最关键的 2~4 条**（哪个站几份材料对不上、哪些站官方没覆盖），"
+                "**别把内部证据的原文措辞整段端给主人**；"
+                "④ 长度克制：整条回复控制在读者扫一眼能看完的量级；"
+                "⑤ **不要用 `#` 标题**（前端不渲染），用小标题就用**加粗短句**。"
+            )
+        elif opened_search:
+            content += (
+                "本次没能读到网页正文（只有搜索结果页或读取失败），如实告诉主人没读到内容，绝不许编内容；"
+                "用猫娘语气说“搜索页已打开，注意看屏幕喵”即可。"
+            )
+        else:
+            content += (
+                "本次既没打开浏览器（主人关了弹窗）也没读到网页正文，所以主人屏幕上什么都不会出现；"
+                "如实告诉主人这次没能给出结果，绝不许编内容，也别装作打开了页面。"
+            )
+        content += "不要再开浏览器（本轮已无 web_search / open_url / verify_current_fact 工具）。"
         msgs.insert(1, {
             "role": "system",
-            "content": (
-                f"（联网搜索已自动完成：本喵已为「{_query}」打开了浏览器搜索页，主人能看到。）"
-                f"主人刚才的请求是联网搜索，你已经在浏览器打开了搜索页。"
-                f"现在直接用猫娘语气告诉主人『搜索页已打开，注意看屏幕喵』即可，"
-                f"不要再提搜索、不要再开浏览器（本轮已无 web_search / open_url 工具）。"
-            ),
+            "content": content,
         })
-        disabled_tools.update({"web_search", "open_url"})
+        disabled_tools.update({"web_search", "open_url", "verify_current_fact"})
     if launched or launch_failed:
         # 告诉模型应用已确定性尝试过（成功/失败都如实告知，防全失败时模型瞎报成功或瞎重试）；
         # 摘掉 launch_app 防止本轮重复调（只在实际发起了启动尝试时才接管，匹配不到应用的留给模型自己调）

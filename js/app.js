@@ -464,6 +464,12 @@
 
     function formatBotMessage(text) {
         let html = escapeHtml(text);
+        // 最基础的两条 markdown：行首 `#` 标题 → 加粗；行首 `- / * / •` → 圆点。
+        // 起因（2026-09-27）：猫娘在长清单里用了 `## 小标题` 和 `- 列表项`，而这里只认
+        // `（动作）` 与 `**加粗**` → 主人屏幕上看到的是字面的 "## " 和 "- "，观感崩了。
+        // 顺序在 escapeHtml 之后、bold 之前：只加我们自己的标签，不引入任何原文 HTML。
+        html = html.replace(/^[ \t]*#{1,6}[ \t]*(.+)$/gm, "<strong>$1</strong>");
+        html = html.replace(/^[ \t]*[-*•][ \t]+/gm, "• ");
         html = html.replace(/（([^）]+)）/g, '<span class="action-text">（$1）</span>');
         html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
         return html;
@@ -1694,6 +1700,8 @@
         document.getElementById("themeColorInput").value = settings.theme_color || "#ec4899";
         document.getElementById("showTimestampSwitch").checked = !!settings.show_timestamp;
         document.getElementById("soundSwitch").checked = !!settings.notification_sound;
+        // 默认开（老配置里没这个字段也当开）
+        document.getElementById("searchBrowserSwitch").checked = settings.search_open_browser !== false;
         const closeBehaviorSelect = document.getElementById("closeBehaviorSelect");
         if (closeBehaviorSelect) {
             closeBehaviorSelect.value = settings.close_behavior === "exit" ? "exit" : "tray";
@@ -1932,6 +1940,7 @@
         saveSetting("show_timestamp", e.target.checked);
     });
     document.getElementById("soundSwitch").addEventListener("change", e => saveSetting("notification_sound", e.target.checked));
+    document.getElementById("searchBrowserSwitch").addEventListener("change", e => saveSetting("search_open_browser", e.target.checked));
 
     // 点击关闭时的行为（仅隐藏到托盘 / 直接退出）
     const closeBehaviorSelect = document.getElementById("closeBehaviorSelect");
