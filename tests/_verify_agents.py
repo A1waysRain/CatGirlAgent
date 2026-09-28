@@ -14,6 +14,7 @@ os.environ["CATGIRL_SKIP_PET"] = "1"
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from backend import agents
+from backend import tools
 
 
 def check(label, value):
@@ -70,6 +71,18 @@ async def main():
         check("渲染包含来源和缺口", "formula1.com" in rendered and "完整时间" in rendered)
     finally:
         agents.httpx.AsyncClient = original
+
+    check("M2 已注册实现", "distill_web" in tools.TOOL_IMPL)
+    check("M2 已注册 schema", any(x["function"]["name"] == "distill_web" for x in tools.TOOL_SCHEMAS))
+    original_distill = agents.distill_web
+    async def fake_tool_distill(question, materials):
+        return {"points": ["工具桥通过"], "sources": [], "gaps": [], "conflicts": [], "confidence": "high"}
+    agents.distill_web = fake_tool_distill
+    try:
+        raw = tools.run_tool("distill_web", {"question": "测试", "materials": "材料"})
+        check("M2 同步桥返回 JSON", json.loads(raw)["points"] == ["工具桥通过"])
+    finally:
+        agents.distill_web = original_distill
 
     # ---- JSON 容错：模型把 JSON 包在解释文字里（围栏剥完还剩前言）也要能解出来 ----
     wrapped = '好的，结果如下：\n```json\n' + json.dumps({

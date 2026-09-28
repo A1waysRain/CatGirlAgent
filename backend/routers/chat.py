@@ -483,6 +483,7 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     # （模型曾空口说"已打开搜索页"却没调用工具导致浏览器没弹，这里兜底）
     # 设置项 search_open_browser=False 时不开浏览器，但**照样读内容**（见下面的搜索分支）
     opened_search = False
+    search_read = False
     search_req = _extract_search_request(request.chatmassage)
     prefer_browser = bool(load_settings().get("search_open_browser", True))
     if search_req:
@@ -597,6 +598,7 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     # 搜索命令已接管：开了浏览器，或主人关掉了弹窗（关掉时照样读内容，只是不给看页面）
     if search_req and (opened_search or not prefer_browser):
         # B站搜只开页面、没有正文可读；必应搜才读内容
+        search_read = _platform == "bing"
         digest = ""
         if _platform == "bing":
             try:
@@ -649,12 +651,14 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                 "本次既没打开浏览器（主人关了弹窗）也没读到网页正文，所以主人屏幕上什么都不会出现；"
                 "如实告诉主人这次没能给出结果，绝不许编内容，也别装作打开了页面。"
             )
-        content += "不要再开浏览器（本轮已无 web_search / open_url / verify_current_fact 工具）。"
+        content += "不要再开浏览器（本轮已无 web_search / open_url / verify_current_fact / distill_web 工具）。"
         msgs.insert(1, {
             "role": "system",
             "content": content,
         })
-        disabled_tools.update({"web_search", "open_url", "verify_current_fact"})
+        # distill_web 一并摘掉：材料已由后端取好并注入，留着它模型可能自填"材料"传进工人
+        # （它手上没有真网页材料）→ 把幻觉喂给工人再当证据用。
+        disabled_tools.update({"web_search", "open_url", "verify_current_fact", "distill_web"})
     if launched or launch_failed:
         # 告诉模型应用已确定性尝试过（成功/失败都如实告知，防全失败时模型瞎报成功或瞎重试）；
         # 摘掉 launch_app 防止本轮重复调（只在实际发起了启动尝试时才接管，匹配不到应用的留给模型自己调）
@@ -709,6 +713,9 @@ async def chat(request: ChatRequest) -> StreamingResponse:
         tool_trace.append("set_alarm")
     if opened_search:
         tool_trace.append("open_url")
+    if search_read:
+        # 搜索正文/提炼结果是本轮临时证据，不应因浏览器开关状态不同而混进长期摘要。
+        tool_trace.append("verify_current_fact")
     if launched or launch_failed:
         tool_trace.append("launch_app")
     if sys_status:

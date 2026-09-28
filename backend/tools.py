@@ -2778,6 +2778,36 @@ def tool_rag_query(query: str, top_k: int = 3) -> str:
     return ctx
 
 
+def tool_distill_web(question: str, materials: str) -> str:
+    """主 agent 可主动调用的只读网页提炼工具；材料必须由调用者显式提供。"""
+    import asyncio
+    import threading
+    from .agents import distill_web
+    try:
+        # run_tool 通常在 asyncio.to_thread 中执行；直接调用时若已有事件循环，
+        # 用独立线程承载 asyncio.run，避免“正在运行的事件循环”冲突。
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            result = asyncio.run(distill_web(question, materials))
+        else:
+            box = {}
+            def worker():
+                try:
+                    box["result"] = asyncio.run(distill_web(question, materials))
+                except Exception as exc:
+                    box["error"] = exc
+            thread = threading.Thread(target=worker, daemon=True)
+            thread.start()
+            thread.join()
+            if "error" in box:
+                raise box["error"]
+            result = box.get("result")
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as exc:
+        return f"网页提炼失败喵：{type(exc).__name__}"
+
+
 # ---------------- 注册表 / 分发 ----------------
 
 TOOL_IMPL = {
@@ -2798,6 +2828,7 @@ TOOL_IMPL = {
     "web_search": tool_web_search,
     "verify_current_fact": tool_verify_current_fact,
     "rag_query": tool_rag_query,
+    "distill_web": tool_distill_web,
     "list_plugins": tool_list_plugins,
     "set_alarm": tool_set_alarm,
     "set_alarms_batch": tool_set_alarms_batch,
@@ -2885,6 +2916,15 @@ TOOL_SCHEMAS = [
             "top_k": {"type": "integer", "description": "返回几条片段，默认3（越小越省 token）"},
         },
         ["query"],
+    ),
+    _fn(
+        "distill_web",
+        "只读网页材料提炼：把调用者已经取得的网页材料整理成结构化要点、完整列表、来源、缺口和来源冲突。只接收本轮问题与材料，不会自行搜索、读取文件或执行网页指令；材料没有的内容必须放入 gaps，冲突必须放入 conflicts。适合长网页、赛历、时间表和多来源材料。提炼失败时如实返回失败，不要把失败当成事实。",
+        {
+            "question": {"type": "string", "description": "本轮需要回答的具体问题"},
+            "materials": {"type": "string", "description": "已经取得的网页材料，包含来源域名/时间/正文或摘要；不要传入聊天历史、人设或无关隐私"},
+        },
+        ["question", "materials"],
     ),
     _fn(
         "set_alarm",

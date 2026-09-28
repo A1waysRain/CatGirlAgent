@@ -32,7 +32,7 @@ _ALARM_DENIAL_RE = re.compile(
 # 工具原始返回永不落入会话；这里只给最终自然语言回复加保留策略。分类宁可保守：
 # 不确定或混合任务保留为 normal，避免把主人需要的解释误当成一次性操作回执。
 _TEMPORARY_TOOLS = {
-    "launch_app", "open_path", "open_url", "web_search", "verify_current_fact", "check_system",
+    "launch_app", "open_path", "open_url", "web_search", "verify_current_fact", "distill_web", "check_system",
     "ui_observe", "ui_click", "ui_type", "ui_search_contact", "ui_cancel_send",
     "ui_send", "ui_send_file", "scan_apps", "get_time",
 }

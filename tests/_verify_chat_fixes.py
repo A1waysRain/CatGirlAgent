@@ -107,6 +107,7 @@ async def fake_stream_answer(sid, msgs, user_text, tools=None, user_msg_id=None,
                              write_requested=False, write_state=None, alarm_created=None):
     captured["tools"] = sorted(t["function"]["name"] for t in (tools or []))
     captured["alarm_created"] = alarm_created
+    captured["write_state"] = write_state or {}
     captured["msgs"] = msgs
     yield {"type": "done", "message_ids": {"assistant": "fake"}}
 
@@ -196,6 +197,13 @@ async def run():
     check("关弹窗：禁止说“搜索页已打开”", "没有打开浏览器" in search_note and "绝不许说" in search_note)
     check("关弹窗：搜索/核验工具仍摘除",
           all(t not in c["tools"] for t in ("web_search", "open_url", "verify_current_fact")))
+    # distill_web 必须一起摘：材料已由后端取好注入，留着它模型可能自填"材料"传进工人
+    # → 把幻觉喂给工人再当证据用（M2 注册成工具后新增的风险）。
+    check("关弹窗：提炼工人工具也摘除（防模型自填材料喂幻觉）",
+          "distill_web" not in c["tools"], str(c["tools"]))
+    check("关弹窗：搜索读取标记为临时工具结论",
+          "verify_current_fact" in c["write_state"].get("tool_trace", []),
+          str(c["write_state"]))
 
     # B站搜 + 关弹窗：既没开浏览器也没有正文可读 → 如实说明，不许装作打开了
     c = await call_chat("B站搜 原神")
