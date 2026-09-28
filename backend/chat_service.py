@@ -241,8 +241,17 @@ async def stream_answer(
         )
         yield {"type": "delta", "text": deny_correction}
         answer += deny_correction
-    stored = session_append(sid, "assistant", answer,
-                            **_assistant_lifecycle(agent_state.get("tool_trace", [])))
+    lifecycle = _assistant_lifecycle(agent_state.get("tool_trace", []))
+    refs = []
+    seen_refs = set()
+    for ref in agent_state.get("fact_refs", []) or []:
+        if not isinstance(ref, dict) or not ref.get("url") or ref["url"] in seen_refs:
+            continue
+        seen_refs.add(ref["url"])
+        refs.append(ref)
+    if refs:
+        lifecycle["fact_refs"] = refs[:8]
+    stored = session_append(sid, "assistant", answer, **lifecycle)
     # L2：窗口外有旧对话没被摘要 → 起后台线程把要点记进小本本（不卡回复、失败下次再试）
     try:
         maybe_summarize(sid)

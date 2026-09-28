@@ -5,6 +5,7 @@
 """
 import asyncio
 import datetime
+import json
 import os
 import shutil
 import sys
@@ -122,7 +123,11 @@ chat_mod._open_search = lambda *a, **k: "已为 xx 打开搜索页"
 _real_brief = chat_mod.fact_brief
 chat_mod.fact_brief = lambda query: "status=verified；example.com：F1 赛历正文要点"
 _real_verify_fact = chat_mod.tool_verify_current_fact
-chat_mod.tool_verify_current_fact = lambda query, **kwargs: '{"status":"verified","evidence":{"full":1,"independent_domains":1},"sources":[]}'
+chat_mod.tool_verify_current_fact = lambda query, **kwargs: json.dumps({
+    "status": "verified", "evidence": {"full": 1, "independent_domains": 1},
+    "sources": [{"title": "资料", "url": "https://example.com/fact", "domain": "example.com",
+                 "published": "2026-09-28", "grade": "full"}],
+}, ensure_ascii=False)
 _real_distill = chat_mod.distill_web
 async def _fake_distill(question, materials):
     return {"points": ["F1 赛历正文要点"], "sources": [{"domain": "example.com", "published": "今天", "grade": "full"}], "gaps": [], "conflicts": [], "confidence": "medium"}
@@ -165,6 +170,9 @@ async def run():
     search_note = " ".join(m.get("content", "") for m in c["msgs"] if m["role"] == "system")
     check("只 search：注入搜索摘要", "example.com" in search_note and "F1 赛历正文要点" in search_note)
     check("只 search：核验工具已摘除", "verify_current_fact" not in c["tools"])
+    check("只 search：来源引用进入会话写入状态",
+          c["write_state"].get("fact_refs", [{}])[0].get("domain") == "example.com",
+          str(c["write_state"].get("fact_refs")))
 
     chat_mod.fact_brief = lambda query: ""
     async def _failed_distill(question, materials):

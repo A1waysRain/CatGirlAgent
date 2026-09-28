@@ -292,6 +292,15 @@ async def call_deepseek_with_tools_stream(
                             # 只记工具名，供会话层给最终结论选择生命周期；不把参数或返回值
                             # 再持久化，避免敏感内容和长 OCR 结果混入聊天记忆。
                             state.setdefault("tool_trace", []).append(name)
+                            if name == "verify_current_fact":
+                                try:
+                                    from .tools import fact_references
+                                    report = json.loads(result)
+                                    refs = fact_references(report)
+                                    if refs:
+                                        state.setdefault("fact_refs", []).extend(refs)
+                                except Exception:
+                                    pass
                         if state is not None and name in _WRITE_TOOLS:
                             state["wrote_file"] = True   # 真调过写文件工具 → 审计放行
                     except Exception as e:

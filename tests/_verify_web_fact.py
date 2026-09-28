@@ -110,7 +110,10 @@ def call(pages=None, rss=None, brave=None, key="", _args=None, **kwargs):
     _NET.brave = brave
     _NET.seen = []
     tools.settings = _Settings(key=key, **kwargs)
-    return json.loads(tools.tool_verify_current_fact(**_args or {}))
+    args = dict(_args or {})
+    # M2 缓存由独立测试覆盖；本文件测试搜索/抓取本体，每次强制刷新避免用例互相命中缓存。
+    args["force_refresh"] = True
+    return json.loads(tools.tool_verify_current_fact(**args))
 
 
 def fetch(url, pages):
@@ -238,10 +241,20 @@ try:
     section("四、时效 / 市场 / 来源年龄 / 可观测")
     # ★查询规范化：主人输入「2026F1赛历」（没空格）时检索召回崩、只有 1 个 full 且是 474 天前的旧稿；
     #   带空格的「2026 F1 赛历」则 3 个 full 全是 1 天前。所以检索与判级都要用规范化后的查询。
-    check("归一化：数字+字母+CJK 拆开", tools._normalize_query("2026F1赛历") == "2026 F1 赛历")
+    check("归一化：数字+字母+CJK 拆开", tools._normalize_query("2026F1赛历") == "F1 2026 赛历")
     check("归一化：F1 不被拆成 F 1", tools._normalize_query("F1 2026") == "F1 2026")
     check("归一化：纯数字/英文不动", tools._normalize_query("2026") == "2026" and tools._normalize_query("F1") == "F1")
-    check("归一化：多空格收敛", tools._normalize_query("2026  F1   赛历") == "2026 F1 赛历")
+    check("归一化：多空格收敛", tools._normalize_query("2026  F1   赛历") == "F1 2026 赛历")
+    check("赛事查询：年份开头调整到赛事词后",
+          tools._normalize_query("2026 F1 赛历") == "F1 2026 赛历")
+    check("赛事查询：带‘年’的年份开头也调整",
+          tools._normalize_query("2026年F1大奖赛分站") == "F1 2026 大奖赛分站")
+    check("节假日查询：保留年份开头",
+          tools._normalize_query("2026年节假日安排") == "2026 年节假日安排")
+    check("高考查询：保留年份开头",
+          tools._normalize_query("2026 高考时间") == "2026 高考时间")
+    check("产品发布查询：保留年份开头",
+          tools._normalize_query("2026 DeepSeek V4 发布") == "2026 DeepSeek V4 发布")
     check("★规范化后词元才认得网页写法",
           {"2026", "f1"} <= set(tools._fact_terms(tools._normalize_query("2026F1赛历"))))
     check("（对照）粘连词元匹配不上网页",
@@ -249,7 +262,7 @@ try:
     # 端到端：粘连查询发给搜索接口时必须是规范化后的形态
     call(pages={url_a: html_a}, rss=[rss_item(url_a)], _args={"query": "2026F1赛历"})
     rss_url = [u for u in _NET.seen if "format=rss" in u][0]
-    check("★粘连查询发给搜索接口时已规范化", "2026%20F1" in rss_url or "2026+F1" in rss_url)
+    check("★粘连查询发给搜索接口时已规范化", "F1+2026" in rss_url or "F1%202026" in rss_url)
 
     # ★抓取预算按新鲜度排序：搜索结果的顺序不动，但**先读新鲜的**
     #   场景：旧稿排在第一、两个新鲜来源在后，max_sources=2 → 排序后旧稿不该占名额

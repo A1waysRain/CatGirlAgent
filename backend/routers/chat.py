@@ -30,6 +30,7 @@ from ..tools import (
     _load_apps,
     _open_and_focus,
     fact_brief,
+    fact_references,
     tool_verify_current_fact,
     run_tool,
     tool_check_system,
@@ -484,6 +485,7 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     # 设置项 search_open_browser=False 时不开浏览器，但**照样读内容**（见下面的搜索分支）
     opened_search = False
     search_read = False
+    search_report = None
     search_req = _extract_search_request(request.chatmassage)
     prefer_browser = bool(load_settings().get("search_open_browser", True))
     if search_req:
@@ -603,6 +605,7 @@ async def chat(request: ChatRequest) -> StreamingResponse:
         if _platform == "bing":
             try:
                 report = json.loads(tool_verify_current_fact(_query, max_sources=4))
+                search_report = report
                 # 材料要给"给人读"的紧凑格式：直接把 JSON 报告喂给工人会因噪音
                 # 喂胖思考量（实测材料 −48%、思考 −49%、耗时 46.4s→29.0s，且只有紧凑版能解析成功）
                 distilled = await distill_web(_query, build_materials(report))
@@ -721,6 +724,8 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     if sys_status:
         tool_trace.append("check_system")
     write_state = {"tool_trace": tool_trace}
+    if search_report:
+        write_state["fact_refs"] = fact_references(search_report)
     return StreamingResponse(
         (_sse(evt) async for evt in stream_answer(sid, msgs, request.chatmassage,
                                                   tools=tools, user_msg_id=user_msg_id,

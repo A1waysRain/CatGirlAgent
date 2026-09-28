@@ -38,11 +38,8 @@ os.chdir(ROOT)          # 让 pydantic 读到 dev .env 的 Key
 
 from backend import agents, tools  # noqa: E402
 
-# 默认查询词选「年份不在开头」的写法：实测 cn.bing.com 对**年份打头**的查询会返回
-# "2026 年度事件/日历"类无关结果（`2026 F1 赛历` → 节假日网站、0~1 条正文），
-# 而 `F1 2026 赛程` → verified / 3 条正文 / 3 独立域名。默认词要能真抓到材料，
-# 否则本脚本会退化成"只验桥、材料是垃圾"。
-DEFAULT_QUERY = "F1 2026 赛程"
+# 默认使用此前会触发 Bing 词序问题的写法，作为修复后的真实回归查询。
+DEFAULT_QUERY = "2026 F1 赛历"
 QUERY = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_QUERY
 FAIL = 0
 

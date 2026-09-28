@@ -1757,7 +1757,21 @@ def _normalize_query(query: str) -> str:
     if not q:
         return q
     q = _CJK_GLUE.sub(" ", q)
-    return re.sub(r"\s{2,}", " ", q).strip()
+    q = re.sub(r"\s{2,}", " ", q).strip()
+    # Bing 中文 RSS 对“年份打头”的赛事查询召回常会偏到年度日历/节假日页。
+    # 只对明确的赛事词收窄调整，避免破坏“2026 高考时间”“2026年政策”等自然词序。
+    event_words = ("f1", "formula 1", "大奖赛", "赛历", "赛程", "分站", "gp", "赛车")
+    if re.match(r"^(?:19|20)\d{2}(?:\s+年)?(?:\s+|$)", q, re.IGNORECASE) \
+            and any(word in q.lower() for word in event_words):
+        match = re.match(r"^((?:19|20)\d{2})(?:\s+年)?\s+(.*)$", q, re.IGNORECASE)
+        if match:
+            rest = match.group(2).strip()
+            first = rest.split(maxsplit=1)
+            if first and first[0].lower() not in {"年"}:
+                q = f"{first[0]} {match.group(1)}"
+                if len(first) > 1:
+                    q += f" {first[1]}"
+    return q
 
 
 def _fact_terms(query: str) -> list[str]:
@@ -1973,8 +1987,9 @@ def _fact_search(query: str, max_sources: int, freshness: str = "current") -> li
     return results
 
 
-def tool_verify_current_fact(query: str, freshness: str = "current", domains: list[str] | None = None, max_sources: int = 5) -> str:
-    """采集当前事实的可核验证据；不把"打开浏览器"或首页导航文字冒充证据。"""
+def tool_verify_current_fact(query: str, freshness: str = "current", domains: list[str] | None = None,
+                             max_sources: int = 5, force_refresh: bool = False) -> str:
+    """采集当前事实的可核验证据；M2 支持 TTL 缓存和强制刷新。"""
     started = time.monotonic()
     query = (query or "").strip()
     if not query:
@@ -1982,6 +1997,14 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
     max_sources = max(2, min(int(max_sources or 5), 8))
     fresh_key, _, _ = _fact_freshness(freshness)
     wanted = {str(d).lower().strip().lstrip("www.") for d in (domains or []) if str(d).strip()}
+    cache_key = _fact_cache_key(query, fresh_key, domains, max_sources)
+    if not force_refresh:
+        cached = _fact_cache_read(cache_key)
+        if cached:
+            cached["cache"] = "hit"
+            cached["cache_checked_at"] = cached.get("checked_at")
+            _log(f"verify_current_fact cache_hit query={query[:80]!r}")
+            return json.dumps(cached, ensure_ascii=False)
     # 「2026F1赛历」这类粘连写法必须规范化后再检索+判级，否则召回差、且新鲜来源会被误判"相关性低"
     search_q = _normalize_query(query)
     mk = _fact_market(search_q)
@@ -2001,10 +2024,18 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
     sources = []
     full_domains_now: set[str] = set()
     per_domain: dict[str, int] = {}
+    seen_urls: set[str] = set()
     # 收手信号按【独立域名的 full 数】算，不按读到的篇数——同域名读十篇也换不来 verified
     target_domains = min(_FACT_TARGET_FULL_DOMAINS, max_sources)
     for item in raw_results:
         url = item.get("url") or ""
+        parsed_url = urllib.parse.urlsplit(url)
+        canonical_url = urllib.parse.urlunsplit((parsed_url.scheme.lower(), parsed_url.netloc.lower(),
+                                                  parsed_url.path.rstrip("/") or "/",
+                                                  parsed_url.query, ""))
+        if canonical_url in seen_urls:
+            continue
+        seen_urls.add(canonical_url)
         host = (urllib.parse.urlparse(url).hostname or "").lower().lstrip("www.")
         if wanted and not any(host == d or host.endswith("." + d) for d in wanted):
             continue
@@ -2071,6 +2102,9 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
     }
     _log(f"verify_current_fact query={query[:80]!r} status={status} "
          f"full={len(full)}/{len(sources)} elapsed={result['elapsed_s']}s")
+    if status != "failed":
+        _fact_cache_write(cache_key, result, _fact_cache_ttl(fresh_key, query))
+    result["cache"] = "miss"
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -2079,6 +2113,96 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
 _FACT_BRIEF_FULL_CHARS = 1500   # 单条 full 正文上限
 _FACT_BRIEF_SNIP_CHARS = 250    # 单条搜索摘要上限
 _FACT_BRIEF_LIMIT = 6000        # 整段上限（含头部状态行与末尾限制行）
+
+# M2：只缓存结构化核验报告，不缓存网页正文之外的用户对话/提示词。
+_FACT_CACHE_FILE = "fact_cache.json"
+_FACT_CACHE_LOCK = threading.Lock()
+
+
+def _fact_cache_path() -> Path:
+    return _user_dir() / _FACT_CACHE_FILE
+
+
+def _fact_cache_ttl(freshness: str, query: str) -> int:
+    """按事实时效给缓存设置保守 TTL；force_refresh 可绕过缓存。"""
+    if freshness == "day":
+        return 6 * 3600
+    if freshness == "week":
+        return 24 * 3600
+    if freshness == "month":
+        return 3 * 86400
+    if freshness == "year":
+        return 7 * 86400
+    # current：新闻/天气/比赛状态变化更快，静态赛历/版本信息可多留一会儿。
+    volatile = re.search(r"新闻|天气|比分|赛果|比赛状态|刚刚|实时|股价|汇率", query or "")
+    return 2 * 3600 if volatile else 24 * 3600
+
+
+def _fact_cache_key(query: str, freshness: str, domains: list[str] | None, max_sources: int) -> str:
+    domain_key = tuple(sorted(str(d).strip().lower().lstrip("www.") for d in (domains or []) if str(d).strip()))
+    payload = {"query": _normalize_query(query), "freshness": freshness,
+               "domains": domain_key, "max_sources": int(max_sources),
+               "provider": getattr(settings, "web_search_provider", "brave"),
+               "has_api_key": bool((getattr(settings, "web_search_api_key", "") or "").strip())}
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _fact_cache_read(key: str) -> dict | None:
+    now = time.time()
+    with _FACT_CACHE_LOCK:
+        try:
+            path = _fact_cache_path()
+            if not path.exists():
+                return None
+            data = json.loads(path.read_text(encoding="utf-8"))
+            entries = data.get("entries", {}) if isinstance(data, dict) else {}
+            item = entries.get(key)
+            if not isinstance(item, dict) or float(item.get("expires_at", 0)) <= now:
+                return None
+            report = item.get("report")
+            return json.loads(json.dumps(report, ensure_ascii=False)) if isinstance(report, dict) else None
+        except Exception:
+            return None
+
+
+def _fact_cache_write(key: str, report: dict, ttl: int) -> None:
+    with _FACT_CACHE_LOCK:
+        try:
+            path = _fact_cache_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = {}
+            if path.exists():
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    data = loaded
+            entries = data.setdefault("entries", {})
+            now = time.time()
+            # 顺手清理过期条目，避免缓存文件无限增长。
+            data["entries"] = {k: v for k, v in entries.items()
+                                if isinstance(v, dict) and float(v.get("expires_at", 0)) > now}
+            data["entries"][key] = {"checked_at": now, "expires_at": now + ttl,
+                                     "report": report}
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(path)
+        except Exception as exc:
+            _log(f"fact_cache_write_failed {type(exc).__name__}")
+
+
+def fact_references(report: dict | None) -> list[dict]:
+    """抽取可展示的短来源引用；不携带正文，避免引用元数据污染记忆。"""
+    if not isinstance(report, dict):
+        return []
+    refs = []
+    for source in report.get("sources") or []:
+        if not isinstance(source, dict) or not source.get("url"):
+            continue
+        refs.append({"title": str(source.get("title") or "")[:160],
+                     "domain": str(source.get("domain") or "")[:120],
+                     "url": str(source.get("url"))[:1000],
+                     "published": str(source.get("published") or "")[:80],
+                     "grade": str(source.get("grade") or "none")})
+    return refs[:8]
 
 
 def fact_brief(query: str, max_sources: int = 4, limit: int = _FACT_BRIEF_LIMIT) -> str:
@@ -3013,6 +3137,7 @@ TOOL_SCHEMAS = [
             "freshness": {"type": "string", "description": "时效要求：current（不限）/ day / week / month / year，会真正传给搜索接口做时间过滤"},
             "domains": {"type": "array", "items": {"type": "string"}, "description": "可选的优先/限制域名，如 formula1.com"},
             "max_sources": {"type": "integer", "description": "最多读取来源数，2-8"},
+            "force_refresh": {"type": "boolean", "description": "为 true 时忽略 TTL 缓存并重新搜索；用户明确说‘重新核验/强制刷新’时使用"},
         },
         ["query"],
     ),
