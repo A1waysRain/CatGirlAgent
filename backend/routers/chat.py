@@ -30,7 +30,7 @@ from ..tools import (
     _load_apps,
     _open_and_focus,
     fact_brief,
-    fact_references,
+    fact_references, fact_metadata,
     tool_verify_current_fact,
     run_tool,
     tool_check_system,
@@ -726,6 +726,7 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     write_state = {"tool_trace": tool_trace}
     if search_report:
         write_state["fact_refs"] = fact_references(search_report)
+        write_state["fact_meta"] = fact_metadata(search_report, _query, "current")
     return StreamingResponse(
         (_sse(evt) async for evt in stream_answer(sid, msgs, request.chatmassage,
                                                   tools=tools, user_msg_id=user_msg_id,

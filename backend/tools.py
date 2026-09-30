@@ -2205,6 +2205,19 @@ def fact_references(report: dict | None) -> list[dict]:
     return refs[:8]
 
 
+def fact_metadata(report: dict | None, query: str = "", freshness: str = "current") -> dict:
+    """提取前端展示/重新核验所需的短元数据，不包含网页正文。"""
+    report = report if isinstance(report, dict) else {}
+    evidence = report.get("evidence") or {}
+    return {"query": str(query or "")[:300], "freshness": str(freshness or "current"),
+            "status": str(report.get("status") or "failed"),
+            "confidence": str(report.get("confidence") or "low"),
+            "checked_at": str(report.get("checked_at") or ""),
+            "elapsed_s": report.get("elapsed_s"), "cache": str(report.get("cache") or "miss"),
+            "full": evidence.get("full", 0),
+            "independent_domains": evidence.get("independent_domains", 0)}
+
+
 def fact_brief(query: str, max_sources: int = 4, limit: int = _FACT_BRIEF_LIMIT) -> str:
     """把一次事实核验压成模型可直接阅读的证据段；读不到正文返回空串。
 

@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from ..chat_service import _sse, build_messages, current_time_hint, stream_answer
 from ..scheduler import scheduler
 from ..tools import TOOL_SCHEMAS
+from ..tools import fact_metadata, fact_references, tool_verify_current_fact
 from .chat import _extract_alarm_request, _extract_write_request
 from ..sessions import (
     clear_session,
@@ -27,6 +28,7 @@ from ..sessions import (
     search_messages,
     set_current,
     set_context_item_policy,
+    update_fact_metadata,
 )
 
 router = APIRouter(prefix="/api")
@@ -97,6 +99,30 @@ async def sessions_search(sid: str, q: str = ""):
     if not get_session(sid):
         raise HTTPException(status_code=404, detail="会话不存在喵")
     return {"results": search_messages(sid, q, limit=50)}
+
+
+@router.post("/sessions/{sid}/messages/{message_id}/fact-refresh")
+async def sessions_fact_refresh(sid: str, message_id: str, payload: dict | None = None):
+    """强制刷新一条联网回复的来源元数据，不重新生成聊天正文或执行其他工具。"""
+    session = get_session(sid)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在喵")
+    message = next((m for m in session.get("messages", [])
+                    if m.get("id") == message_id and m.get("role") == "assistant"), None)
+    meta = message.get("fact_meta") if message else None
+    if not isinstance(meta, dict) or not meta.get("query"):
+        raise HTTPException(status_code=400, detail="这条回复没有可重新核验的联网问题喵")
+    fresh = str((payload or {}).get("freshness") or meta.get("freshness") or "current")
+    import asyncio
+    raw = await asyncio.to_thread(tool_verify_current_fact, meta["query"], fresh, None, 5, True)
+    import json
+    report = json.loads(raw)
+    refs = fact_references(report)
+    new_meta = fact_metadata(report, meta["query"], fresh)
+    updated = update_fact_metadata(sid, message_id, refs, new_meta)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="回复不存在喵")
+    return {"ok": True, "message_id": message_id, "fact_refs": refs, "fact_meta": new_meta}
 
 
 @router.get("/sessions/{sid}/summary")

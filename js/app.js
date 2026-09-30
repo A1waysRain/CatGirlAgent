@@ -501,7 +501,54 @@
         }
     }
 
-    function appendMessage(role, text, msgId, canRegenerate) {
+    function appendFactPanel(body, msgId, factRefs, factMeta) {
+        if (!factMeta || !factMeta.query || !factRefs || !factRefs.length) return;
+        const panel = document.createElement("details");
+        panel.className = "fact-panel";
+        const summary = document.createElement("summary");
+        const status = factMeta.status === "verified" ? "已找到" : "证据有限";
+        summary.textContent = "联网核验 · " + status + " " + factRefs.length + " 个来源";
+        panel.appendChild(summary);
+        const info = document.createElement("div");
+        info.className = "fact-meta";
+        info.textContent = "核验时间：" + (factMeta.checked_at || "未知") +
+            "　正文证据：" + (factMeta.full || 0) + " 条　" +
+            "独立来源：" + (factMeta.independent_domains || 0) + " 个";
+        panel.appendChild(info);
+        const list = document.createElement("div");
+        list.className = "fact-sources";
+        factRefs.forEach(function (ref) {
+            const row = document.createElement("a");
+            row.className = "fact-source";
+            row.href = ref.url; row.target = "_blank"; row.rel = "noopener";
+            row.textContent = (ref.domain || "未知来源") + " · " + (ref.grade || "none");
+            row.title = ref.title || ref.url;
+            list.appendChild(row);
+        });
+        panel.appendChild(list);
+        const refresh = document.createElement("button");
+        refresh.className = "fact-refresh";
+        refresh.type = "button";
+        refresh.textContent = "重新核验";
+        refresh.addEventListener("click", async function () {
+            refresh.disabled = true; refresh.textContent = "核验中…";
+            try {
+                const r = await fetch("/api/sessions/" + encodeURIComponent(currentSessionId) +
+                    "/messages/" + encodeURIComponent(msgId) + "/fact-refresh", { method: "POST" });
+                const data = await r.json();
+                if (!r.ok) throw new Error(data.detail || "刷新失败");
+                const parent = panel.parentNode;
+                panel.remove();
+                appendFactPanel(parent, msgId, data.fact_refs, data.fact_meta);
+                showToast("来源已重新核验喵");
+            } catch (e) { showToast(e.message || "重新核验失败喵"); }
+            finally { refresh.disabled = false; refresh.textContent = "重新核验"; }
+        });
+        panel.appendChild(refresh);
+        body.appendChild(panel);
+    }
+
+    function appendMessage(role, text, msgId, canRegenerate, factRefs, factMeta) {
         const wrap = document.createElement("div");
         wrap.className = "message " + role;
 
@@ -526,6 +573,7 @@
         bubble.className = "msg-bubble";
         bubble.innerHTML = role === "bot" ? formatBotMessage(text) : escapeHtml(text);
         body.appendChild(bubble);
+        if (role === "bot") appendFactPanel(body, msgId, factRefs, factMeta);
         wrap.appendChild(body);
 
         // 操作钮：只有真实落库的消息（有 id）才有；user 的 row-reverse 自动落气泡外侧
@@ -550,7 +598,7 @@
         msgs.forEach(function (m, i) {
             // 只有最后一条猫娘回复可以重新生成
             const isLastAssistant = (m.role === "assistant") && (i === msgs.length - 1);
-            const el = appendMessage(m.role === "user" ? "user" : "bot", m.content, m.id, isLastAssistant);
+            const el = appendMessage(m.role === "user" ? "user" : "bot", m.content, m.id, isLastAssistant, m.fact_refs, m.fact_meta);
             if (isLastAssistant) lastBotEl = el;
         });
         refreshMeta();
@@ -615,7 +663,7 @@
         const start = domTail;
         if (srvLen > start) {
             serverMsgs.slice(start).forEach(function (m) {
-                appendMessage(m.role === "user" ? "user" : "bot", m.content, m.id, false);
+                appendMessage(m.role === "user" ? "user" : "bot", m.content, m.id, false, m.fact_refs, m.fact_meta);
             });
         }
 
@@ -856,7 +904,7 @@
                 buffer += text || "";
                 kick();
             },
-            done(assistantId) {
+            done(assistantId, afterFinish) {
                 const finish = function () {
                     removeTyping();
                     if (!el && buffer) el = appendMessage("bot", buffer);
@@ -868,6 +916,9 @@
                     }
                     if (el) delete el.dataset.streaming;  // reveal 收尾，允许同步恢复
                     refreshMeta();
+                    // 逐字 reveal 收尾后才轮到"挂在气泡上的东西"（来源面板等）——
+                    // 不能在 onDone 里直接挂：reveal 没跑完时 lastBotEl 还是 null
+                    if (typeof afterFinish === "function") afterFinish(el);
                 };
                 // 等 buffer 全部 reveal 完再补按钮（不然按钮出现在"字还没吐完"的时候很怪）
                 if (timer || shown < buffer.length) pendingDone = finish;
@@ -1146,7 +1197,14 @@
                     }
                 },
                 onDelta(evt) { streamBot.delta(evt.text); },
-                onDone(evt)  { streamBot.done(evt.message_ids && evt.message_ids.assistant); },
+                onDone(evt) {
+                    // 来源面板交给 done() 的收尾回调挂（reveal 完成时 lastBotEl 才被赋值）
+                    streamBot.done(evt.message_ids && evt.message_ids.assistant, function (el) {
+                        if (el && evt.fact_meta && evt.fact_refs) {
+                            appendFactPanel(el.querySelector(".msg-body"), evt.message_ids.assistant, evt.fact_refs, evt.fact_meta);
+                        }
+                    });
+                },
                 onError(detail) { streamBot.fail(detail); },
             });
         } catch (error) {

@@ -419,6 +419,16 @@ body::after {
   box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-md);
 }
 
+/* 联网核验来源：默认收起，避免把聊天气泡变成搜索结果页。 */
+.fact-panel { margin-top:8px; max-width: min(620px, 100%); color:var(--ink-soft); font-size:11px; }
+.fact-panel summary { cursor:pointer; color:var(--accent-deep); user-select:none; }
+.fact-meta { padding:6px 0 4px; line-height:1.5; }
+.fact-sources { display:flex; flex-wrap:wrap; gap:5px 8px; }
+.fact-source { color:var(--accent-deep); text-decoration:none; }
+.fact-source:hover { text-decoration:underline; }
+.fact-refresh { margin-top:6px; border:1px solid var(--accent-border); background:var(--card); color:var(--accent-deep); border-radius:5px; padding:3px 8px; cursor:pointer; font:inherit; }
+.fact-refresh:disabled { opacity:.55; cursor:wait; }
+
 /* 图片/文件气泡（在 .msg-body 内，非文字泡） */
 .chat-image {
   max-width: 260px; max-height: 200px;
@@ -542,7 +552,7 @@ body::after {
 
 .set-group { padding:14px 0; border-bottom:1px solid var(--line); }
 .set-group:last-child { border-bottom:none; }
-.set-group h4 { font-size:11px; color:var(--ink-faint); letter-spacing:1.5px; margin-bottom:10px; font-weight:600; }
+.set-group h4 { font-size:15px; color:var(--accent-deep); letter-spacing:1.2px; margin-bottom:11px; font-weight:700; }
 .set-row { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
 .set-row:last-child { margin-bottom:0; }
 .set-label { flex:1; font-size:13px; font-weight:500; color:var(--ink); }

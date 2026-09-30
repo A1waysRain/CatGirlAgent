@@ -251,6 +251,8 @@ async def stream_answer(
         refs.append(ref)
     if refs:
         lifecycle["fact_refs"] = refs[:8]
+    if isinstance(agent_state.get("fact_meta"), dict):
+        lifecycle["fact_meta"] = agent_state["fact_meta"]
     stored = session_append(sid, "assistant", answer, **lifecycle)
     # L2：窗口外有旧对话没被摘要 → 起后台线程把要点记进小本本（不卡回复、失败下次再试）
     try:
@@ -262,4 +264,5 @@ async def stream_answer(
     except Exception:
         pass
     assistant_id = stored[-1]["id"] if stored and stored[-1].get("role") == "assistant" else None
-    yield {"type": "done", "message_ids": {"assistant": assistant_id}}
+    yield {"type": "done", "message_ids": {"assistant": assistant_id},
+           "fact_refs": refs[:8], "fact_meta": lifecycle.get("fact_meta")}

@@ -294,11 +294,12 @@ async def call_deepseek_with_tools_stream(
                             state.setdefault("tool_trace", []).append(name)
                             if name == "verify_current_fact":
                                 try:
-                                    from .tools import fact_references
+                                    from .tools import fact_references, fact_metadata
                                     report = json.loads(result)
                                     refs = fact_references(report)
                                     if refs:
                                         state.setdefault("fact_refs", []).extend(refs)
+                                    state["fact_meta"] = fact_metadata(report, args.get("query", ""), args.get("freshness", "current"))
                                 except Exception:
                                     pass
                         if state is not None and name in _WRITE_TOOLS:

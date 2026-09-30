@@ -421,7 +421,7 @@ def search_messages(sid: str, query: str, limit: int = 50) -> list[dict]:
 
 def append_message(sid: str, role: str, content: str, *, context_policy: str | None = None,
                    expires_at: float | None = None, summary_allowed: bool | None = None,
-                   fact_refs: list[dict] | None = None) -> list[dict]:
+                   fact_refs: list[dict] | None = None, fact_meta: dict | None = None) -> list[dict]:
     """向会话追加一条消息并落盘（首条 user 消息自动命名），返回该会话最新消息列表（截 MAX_STORED）。"""
     with _lock:
         index = _ensure_index()
@@ -445,6 +445,8 @@ def append_message(sid: str, role: str, content: str, *, context_policy: str | N
             message["summary_allowed"] = bool(summary_allowed)
         if fact_refs:
             message["fact_refs"] = list(fact_refs)
+        if isinstance(fact_meta, dict):
+            message["fact_meta"] = dict(fact_meta)
         session["messages"].append(message)
         # 首条用户消息自动命名（去换行，截 12 字）
         if role == "user" and session["title"] in ("新会话", ""):
@@ -454,6 +456,24 @@ def append_message(sid: str, role: str, content: str, *, context_policy: str | N
         session["updated_at"] = time.time()
         _save_session(session)
         return session["messages"]
+
+
+def update_fact_metadata(sid: str, message_id: str, fact_refs: list[dict], fact_meta: dict) -> dict | None:
+    """更新一条 assistant 消息的核验元数据，不改聊天正文。"""
+    with _lock:
+        _ensure_index()
+        session = _load_session(sid)
+        if not session:
+            return None
+        for message in session.get("messages", []):
+            if message.get("id") != message_id or message.get("role") != "assistant":
+                continue
+            message["fact_refs"] = list(fact_refs or [])
+            message["fact_meta"] = dict(fact_meta or {})
+            session["updated_at"] = time.time()
+            _save_session(session)
+            return message
+        return None
 
 
 # ---------- 上下文保留项（M1） ----------
