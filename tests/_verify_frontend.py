@@ -94,6 +94,29 @@ def seed_context_item(apd: str, sid: str, content: str) -> None:
     subprocess.run([sys.executable, "-c", code], env=env, cwd=HERE, check=True)
 
 
+def seed_fact_message(apd: str, sid: str) -> None:
+    """给指定会话追加一条带来源元数据的 assistant 回复（供 [19] 验证历史渲染路径）。
+
+    只种一条——同一会话里其他回复都没有 fact_meta，正好用来验「没核验的回复不长面板」。
+    """
+    env = dict(os.environ)
+    env["APPDATA"] = apd
+    code = (
+        "import sys; sys.path.insert(0, %r)\n"
+        "from backend.sessions import append_message\n"
+        "refs = [\n"
+        "    {'url': 'https://f1calendar.com/2026', 'domain': 'f1calendar.com', 'grade': 'full', 'title': 'F1 2026'},\n"
+        "    {'url': 'https://www.formula1.com/racing/2026', 'domain': 'formula1.com', 'grade': 'full', 'title': 'Races'},\n"
+        "    {'url': 'https://zhuanlan.zhihu.com/p/123', 'domain': 'zhuanlan.zhihu.com', 'grade': 'snippet', 'title': '赛历'},\n"
+        "]\n"
+        "meta = {'query': '2026F1赛历', 'freshness': 'current', 'status': 'verified', 'confidence': 'medium',\n"
+        "        'checked_at': '2026-09-30T14:23:41+0800', 'elapsed_s': 6.3, 'cache': 'hit',\n"
+        "        'full': 2, 'independent_domains': 2}\n"
+        "append_message(%r, 'assistant', '（历史渲染）这是查到的赛历喵', fact_refs=refs, fact_meta=meta)\n"
+    ) % (HERE, sid)
+    subprocess.run([sys.executable, "-c", code], env=env, cwd=HERE, check=True)
+
+
 def start_server(apd: str) -> subprocess.Popen:
     env = dict(os.environ)
     env["APPDATA"] = apd
@@ -156,8 +179,35 @@ def main():
             def _sse_body(events):
                 return "".join("data: " + json.dumps(e, ensure_ascii=False) + "\n\n" for e in events)
 
+            # [19] 用的假来源元数据（与 seed_fact_message 种的同一套，便于对数字）
+            FACT_REFS = [
+                {"url": "https://f1calendar.com/2026", "domain": "f1calendar.com",
+                 "grade": "full", "title": "F1 2026"},
+                {"url": "https://www.formula1.com/racing/2026", "domain": "formula1.com",
+                 "grade": "full", "title": "Races"},
+                {"url": "https://zhuanlan.zhihu.com/p/123", "domain": "zhuanlan.zhihu.com",
+                 "grade": "snippet", "title": "赛历"},
+            ]
+            FACT_META = {"query": "2026F1赛历", "freshness": "current", "status": "verified",
+                         "confidence": "medium", "checked_at": "2026-09-30T14:23:41+0800",
+                         "elapsed_s": 6.3, "cache": "hit", "full": 2, "independent_domains": 2}
+
             def mock_chat(route):
                 body = json.loads(route.request.post_data or "{}")
+                # [19] 直播路径：含关键词的请求回一条「带来源元数据 + 故意很长」的回复。
+                # 长文本 = 打字机 reveal 要跑好几秒，done 到达时 reveal 必然没结束——
+                # 这正是 09-30 那个「面板挂不上」bug 的现场条件。
+                if "核验来源测试" in (body.get("chatmassage") or ""):
+                    route.fulfill(status=200, content_type="text/event-stream", body=_sse_body([
+                        {"type": "meta",
+                         "session": {"id": body.get("session_id"), "title": "测试会话"},
+                         "message_ids": {"user": "mock-user-fact"}},
+                        {"type": "delta", "text": "（耳朵抖了抖）本喵扒了一圈回来啦，"
+                                                  + "这条故意写长一点，让打字机慢慢吐字喵。" * 8},
+                        {"type": "done", "message_ids": {"assistant": "mock-bot-fact"},
+                         "fact_refs": FACT_REFS, "fact_meta": FACT_META},
+                    ]))
+                    return
                 route.fulfill(status=200, content_type="text/event-stream", body=_sse_body([
                     {"type": "meta",
                      "session": {"id": body.get("session_id"), "title": "测试会话"},
@@ -166,6 +216,15 @@ def main():
                     {"type": "delta", "text": "测试通过啦"},
                     {"type": "done", "message_ids": {"assistant": "mock-bot-1"}},
                 ]))
+
+            def mock_fact_refresh(route):
+                # 「重新核验」真打接口要联网 50~70s，这里 mock 成「换成 4 个来源」验交互
+                route.fulfill(status=200, content_type="application/json", json={
+                    "ok": True, "message_id": "mock-bot-fact",
+                    "fact_refs": FACT_REFS + [{"url": "https://cn.bing.com/x", "domain": "cn.bing.com",
+                                               "grade": "snippet", "title": "新来源"}],
+                    "fact_meta": dict(FACT_META, full=3, independent_domains=3, cache="miss"),
+                })
 
             def mock_regenerate(route):
                 route.fulfill(status=200, content_type="text/event-stream", body=_sse_body([
@@ -176,6 +235,7 @@ def main():
 
             page.route("**/api/chat_response", mock_chat)
             page.route("**/api/sessions/*/regenerate", mock_regenerate)
+            page.route("**/api/sessions/*/messages/*/fact-refresh", mock_fact_refresh)
 
             page.goto(BASE + "/")
             page.wait_for_timeout(1200)
@@ -641,6 +701,67 @@ def main():
             restored = page.evaluate("""async () => (await (await fetch('/api/settings')).json()).search_open_browser""")
             assert restored is True, f"应能再打开: {restored}"
             print("[18] 联网搜索开关 OK | 默认开→关(落盘 false)→开(true)，免责小字在位")
+
+            # ---- [19] 来源面板（联网事实核验 M3，2026-09-30 新增）----
+            # 为什么必须有这节：M3 上线时面板在「直播回复」里永远挂不上——onDone 里直接摸
+            # lastBotEl，而那一刻打字机 reveal 还没收尾、lastBotEl 仍是 null（要到 finish()
+            # 才赋值）。纯后端测试、node --check、接口 200 全发现不了，只有真渲染能逮住。
+            # 修法：streamBot.done(assistantId, afterFinish) 收尾回调。本节把两条路径都锁住。
+            # ① 关掉设置浮层（[12] 起一直开着，聊天区被盖住）
+            page.click("#settingsCloseBtn")
+            page.wait_for_timeout(400)
+            assert not page.evaluate(
+                "document.getElementById('settingsOverlay').classList.contains('open')"), "设置浮层应已关闭"
+
+            # ② 历史渲染路径：给当前会话种一条带 fact_meta 的回复 → 刷新走 renderHistory
+            cur = page.evaluate("async () => (await (await fetch('/api/sessions')).json()).current")
+            assert cur, "应能取到当前会话 id"
+            seed_fact_message(apd, cur)
+            page.reload()
+            page.wait_for_timeout(1200)
+            panel_n = page.locator(".fact-panel").count()
+            assert panel_n == 1, f"只有核验过的那条回复该有面板（同会话其他回复没有 fact_meta）: {panel_n}"
+            summary_txt = page.locator(".fact-panel summary").first.text_content()
+            assert "已找到" in summary_txt and "3 个来源" in summary_txt, f"摘要文案: {summary_txt}"
+            assert not page.locator(".fact-panel .fact-sources").first.is_visible(), "来源面板应默认收起"
+            page.click(".fact-panel summary")
+            page.wait_for_timeout(250)
+            srcs = page.locator(".fact-panel .fact-source")
+            assert srcs.count() == 3 and srcs.first.is_visible(), f"展开后应有 3 个可点来源: {srcs.count()}"
+            meta_txt = page.locator(".fact-panel .fact-meta").first.text_content()
+            assert "核验时间" in meta_txt and "正文证据：2" in meta_txt and "独立来源：2" in meta_txt, \
+                f"元数据三项应齐全: {meta_txt}"
+            assert page.locator(".fact-panel .fact-refresh").count() == 1, "应有「重新核验」按钮"
+
+            # ③ 直播回复路径（★本次 bug 现场）：发一条触发带来源的 mock 回复。
+            #    delta 故意很长 → done 到达时 reveal 还在跑；面板必须自己挂上（不许刷页面）。
+            before = page.locator(".fact-panel").count()
+            page.fill("#messageInput", "核验来源测试")
+            page.keyboard.press("Enter")
+            try:
+                page.wait_for_selector(f".fact-panel >> nth={before}", timeout=25000)
+                live_ok = True
+            except Exception:
+                live_ok = False
+            assert live_ok, "★直播回复的面板没挂上——onDone 里是不是又直接用 lastBotEl 了？"
+            assert page.evaluate("""() => {
+                const p = [...document.querySelectorAll('.fact-panel')].pop();
+                return p.closest('.message').classList.contains('bot');
+            }"""), "面板应挂在最新一条猫娘气泡里"
+            assert not page.locator(".fact-panel").last.locator(".fact-sources").is_visible(), \
+                "直播面板也应默认收起"
+            assert page.locator(".message.bot").last.locator(".fact-panel").count() == 1, \
+                "一条回复只该挂一个面板（别重复挂）"
+
+            # ④ 「重新核验」按钮（接口已 mock 成 4 个来源，避免真联网 50~70s）
+            page.locator(".fact-panel").first.locator(".fact-refresh").click()
+            page.wait_for_timeout(700)
+            refreshed = page.locator(".fact-panel summary").first.text_content()
+            assert "4 个来源" in refreshed, f"重新核验后面板应换成新数据: {refreshed}"
+            rmeta = page.locator(".fact-panel .fact-meta").first.text_content()
+            assert "正文证据：3" in rmeta and "独立来源：3" in rmeta, f"刷新后元数据应更新: {rmeta}"
+            print("[19] 来源面板 OK | 历史渲染(默认收起/3来源/元数据全) + 直播回复(打字机未完也挂上)"
+                  " + 不重复挂 + 重新核验换新数据 全过")
 
             browser.close()
     finally:
