@@ -26,8 +26,9 @@ from ..sessions import (
     recent_messages,
     restore_assistant,
     search_messages,
-    set_current,
     set_context_item_policy,
+    set_current,
+    set_title,
     update_fact_metadata,
 )
 
@@ -63,6 +64,21 @@ async def sessions_switch(payload: dict):
     if not set_current(sid):
         raise HTTPException(status_code=404, detail="会话不存在喵")
     return {"current": sid}
+
+
+@router.put("/sessions/{sid}/title")
+async def sessions_set_title(sid: str, payload: dict):
+    """手动改会话标题。
+
+    改完会把会话的 title_auto 置 False——**主人亲自起的名，之后不会再被自动提炼覆盖**。
+    """
+    title = (payload.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="标题不能为空喵")
+    session = set_title(sid, title[:60])  # 截一下上限：前端有输入限制，但接口得自己兜住
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在喵")
+    return {"session": {"id": session["id"], "title": session["title"]}}
 
 
 @router.delete("/sessions/{sid}")

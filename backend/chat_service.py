@@ -11,6 +11,7 @@ from .mood import infer_mood
 from .notifier import notifier
 from .sessions import append_message as session_append, get_session, get_summary
 from .summary import maybe_summarize
+from .title import maybe_title
 from .tools import TOOL_SCHEMAS
 
 # 「声称完成」话术：配合写文件审计，检测猫娘空口说"已生成/已放到"却没真调写文件工具
@@ -257,6 +258,12 @@ async def stream_answer(
     # L2：窗口外有旧对话没被摘要 → 起后台线程把要点记进小本本（不卡回复、失败下次再试）
     try:
         maybe_summarize(sid)
+    except Exception:
+        pass
+    # 会话标题：第一轮问答结束后，让提炼子 agent 把标题从「截 12 字」换成概括（同款后台线程；
+    # 靠 title_auto 标记判断该不该起名，所以后续轮次和存量会话都不会重复触发）
+    try:
+        maybe_title(sid, user_text, answer)
     except Exception:
         pass
     try:

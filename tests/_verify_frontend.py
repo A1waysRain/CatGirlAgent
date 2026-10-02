@@ -36,6 +36,22 @@ def seed(apd: str) -> None:
     subprocess.run([sys.executable, "-c", code], env=env, cwd=HERE, check=True)
 
 
+def backend_set_title(apd: str, title: str) -> None:
+    """模拟「标题被后端改了」（等价于第一轮自动提炼落笔）：给当前会话直接 set_title。
+
+    用来验 4s 轮询能把新标题刷到顶栏——不修 syncRemoteSessions 的话它只更新变量不写
+    DOM（applyRemoteSessionMessages 在消息数没变时提前 return），顶栏永远不动。
+    """
+    env = dict(os.environ)
+    env["APPDATA"] = apd
+    code = (
+        "import sys; sys.path.insert(0, %r)\n"
+        "from backend.sessions import get_current, set_title\n"
+        "set_title(get_current(), %r)\n"
+    ) % (HERE, title)
+    subprocess.run([sys.executable, "-c", code], env=env, cwd=HERE, check=True)
+
+
 def remote_append(apd: str, pairs) -> None:
     """模拟「他端（手机/后端）往当前会话追加消息」：起子进程调 backend.sessions
     append_message，写进同一份隔离会话文件（等价于手机连 LAN 往电脑会话里发话）。"""
@@ -257,7 +273,7 @@ def main():
             icons = page.evaluate("""() => {
                 const sels = ['.func-item .fi img','.tool-btn .ti img','.collapse-btn img',
                     '.new-chat img','.name-edit img','.session-item .ico img','.session-item .del img',
-                    '.send-btn img'];
+                    '.cur-title .title-edit img','.send-btn img'];
                 const bad = [];
                 for (const s of sels) {
                     document.querySelectorAll(s).forEach(im => { if (im.naturalWidth <= 0) bad.push(im.src); });
@@ -762,6 +778,91 @@ def main():
             assert "正文证据：3" in rmeta and "独立来源：3" in rmeta, f"刷新后元数据应更新: {rmeta}"
             print("[19] 来源面板 OK | 历史渲染(默认收起/3来源/元数据全) + 直播回复(打字机未完也挂上)"
                   " + 不重复挂 + 重新核验换新数据 全过")
+
+            # ---- [20] 会话标题：顶栏 ✎ 弹小窗改名 + 轮询把后端新标题送到顶栏 ----
+            # 为什么要这节：①改名小窗走真后端 PUT（title_auto 置 False 防覆盖）
+            # ②syncRemoteSessions 原来只更新 currentSessionTitle 变量、不写 DOM，
+            #   所以"第一轮自动提炼出来的标题"在顶栏根本看不见——纯后端测试发现不了。
+            # ③小窗本身是给"点 ✎ 体感不明显"（原 contenteditable 只有一圈虚线框）改的，
+            #   得锁住"确实弹出可见小窗"，别再退回隐形编辑。
+            assert page.locator("#titleEditBtn").count() == 1, "顶栏应有改标题的 ✎ 按钮"
+            assert page.locator(".cur-title .title-edit img").first.evaluate("im => im.naturalWidth > 0"), \
+                "✎ 图标应加载出来"
+
+            # ① 点 ✎ → 弹出可见小窗 + 自动聚焦 + 带出当前标题
+            title_before = page.locator("#curTitle").text_content()
+            page.locator("#titleEditBtn").click()
+            page.wait_for_timeout(250)
+            assert page.locator("#titlePop").is_visible(), "点 ✎ 应弹出改名小窗（不能是隐形就地编辑）"
+            assert page.evaluate("() => document.activeElement === document.getElementById('titlePopInput')"), \
+                "小窗应自动聚焦到输入框"
+            assert page.input_value("#titlePopInput") == title_before, \
+                f"输入框应带出当前标题: {page.input_value('#titlePopInput')!r} vs {title_before!r}"
+
+            # ② Escape = 取消（关窗不改）
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(250)
+            assert not page.locator("#titlePop").is_visible(), "Escape 应关掉小窗"
+            assert page.locator("#curTitle").text_content() == title_before, "Escape 不该改标题"
+
+            # ③ 点窗外 = 取消
+            page.locator("#titleEditBtn").click()
+            page.wait_for_timeout(200)
+            assert page.locator("#titlePop").is_visible(), "应能再次弹出"
+            page.locator("#curTitle").click()
+            page.wait_for_timeout(300)
+            assert not page.locator("#titlePop").is_visible(), "点窗外应关掉小窗"
+            assert page.locator("#curTitle").text_content() == title_before, "点窗外不该改标题"
+
+            # ④ 空白 → 提示 + 不关窗（让他接着改）
+            page.locator("#titleEditBtn").click()
+            page.wait_for_timeout(200)
+            page.fill("#titlePopInput", "   ")
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(400)
+            assert page.locator("#titlePop").is_visible(), "空白标题不该关窗"
+            assert "不能为空" in page.locator("#toast").text_content(), \
+                f"应提示标题不能为空: {page.locator('#toast').text_content()!r}"
+            assert page.locator("#curTitle").text_content() == title_before, "空白标题不该改标题"
+
+            # ⑤ 回车 = 保存（真打 PUT /api/sessions/{sid}/title）→ 关窗 + 顶栏/侧栏同步 + 刷新后仍在
+            page.fill("#titlePopInput", "我自己起的会话名")
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(800)
+            assert not page.locator("#titlePop").is_visible(), "保存后应关窗"
+            assert page.locator("#curTitle").text_content() == "我自己起的会话名", \
+                f"顶栏标题应改为新名: {page.locator('#curTitle').text_content()}"
+            side = page.evaluate("""() => {
+                const el = document.querySelector('.session-item.active .tt');
+                return el ? el.textContent : null;
+            }""")
+            assert side == "我自己起的会话名", f"侧栏会话项标题应同步: {side}"
+            page.reload()
+            page.wait_for_timeout(1200)
+            assert page.locator("#curTitle").text_content() == "我自己起的会话名", \
+                "刷新后标题应已持久化（证明真打了后端）"
+
+            # ⑥ 「取消」按钮 = 关窗不改
+            page.locator("#titleEditBtn").click()
+            page.wait_for_timeout(200)
+            page.fill("#titlePopInput", "这个名字不要")
+            page.locator("#titlePopCancel").click()
+            page.wait_for_timeout(300)
+            assert not page.locator("#titlePop").is_visible(), "点取消应关窗"
+            assert page.locator("#curTitle").text_content() == "我自己起的会话名", "取消不该改标题"
+
+            # ⑦ 后端改了标题 → 4s 轮询必须把顶栏刷新（★本节点的回归测试）
+            backend_set_title(apd, "自动提炼出来的标题")
+            page.wait_for_function(
+                "() => document.getElementById('curTitle').textContent === '自动提炼出来的标题'",
+                timeout=9000)
+            side2 = page.evaluate("""() => {
+                const el = document.querySelector('.session-item.active .tt');
+                return el ? el.textContent : null;
+            }""")
+            assert side2 == "自动提炼出来的标题", f"轮询也该刷新侧栏标题: {side2}"
+            print("[20] 会话标题 OK | ✎弹小窗(可见/聚焦/带出当前名) + Enter 保存(关窗/侧栏同步/刷新仍在)"
+                  " + Escape·点窗外·取消 三种不改 + 空白提示不关窗 + 后端改标题经轮询刷到顶栏")
 
             browser.close()
     finally:

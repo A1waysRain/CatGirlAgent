@@ -26,6 +26,11 @@
     const brandAvatar = document.getElementById("brandAvatar");
     const curTitle = document.getElementById("curTitle");
     const curMeta = document.getElementById("curMeta");
+    const titleEditBtn = document.getElementById("titleEditBtn");
+    const titlePop = document.getElementById("titlePop");
+    const titlePopInput = document.getElementById("titlePopInput");
+    const titlePopOk = document.getElementById("titlePopOk");
+    const titlePopCancel = document.getElementById("titlePopCancel");
 
     const settingsOverlay = document.getElementById("settingsOverlay");
     const settingsCloseBtn = document.getElementById("settingsCloseBtn");
@@ -151,6 +156,67 @@
         showToast("称呼已改成 " + val + " 喵");
     }
 
+    // ===== 会话标题改名（顶栏 ✎ → 弹小窗）=====
+    // 走 PUT /api/sessions/{sid}/title；后端会把该会话的 title_auto 置 False，
+    // 所以主人亲手改过的标题不会再被"第一轮自动提炼"覆盖掉。
+    // 为什么改成小窗：原来是在 <h2> 上直接 contenteditable，只有一圈虚线框、跟平时几乎没差别，
+    // 主人反馈"点了几次体感不明显"——弹个小窗才一眼看得出进入了编辑态。
+    function titlePopOpen() { return !titlePop.hidden; }
+
+    function placeTitlePop() {
+        // 贴在标题下方（左对齐标题、右/左越界时钳制回视窗内）
+        const r = curTitle.getBoundingClientRect();
+        const w = titlePop.offsetWidth || 272;
+        let left = r.left;
+        left = Math.max(10, Math.min(left, window.innerWidth - w - 10));
+        titlePop.style.left = left + "px";
+        titlePop.style.top = (r.bottom + 8) + "px";
+    }
+
+    function openTitlePop() {
+        if (!currentSessionId) return;
+        titlePop.hidden = false;
+        titleEditBtn.classList.add("active");
+        placeTitlePop();
+        titlePopInput.value = currentSessionTitle || "";  // 带出当前标题，改起来有参照
+        titlePopInput.focus();
+        titlePopInput.select();
+    }
+
+    function closeTitlePop() {
+        if (!titlePopOpen()) return;
+        titlePop.hidden = true;
+        titleEditBtn.classList.remove("active");
+    }
+
+    async function commitTitlePop() {
+        const val = (titlePopInput.value || "").replace(/\s+/g, " ").trim();
+        if (!val) {                       // 空白：不关窗，让他接着改（关掉才提示等于白改一次）
+            showToast("标题不能为空喵～");
+            titlePopInput.focus();
+            return;
+        }
+        if (val === currentSessionTitle) { closeTitlePop(); return; }  // 没改，静默关掉
+        const sid = currentSessionId;
+        try {
+            const r = await fetch("/api/sessions/" + encodeURIComponent(sid) + "/title", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ title: val }),
+            });
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            const saved = (await r.json()).session.title;
+            // syncSessionTitle 会同时写顶栏和侧栏列表项；refreshSessionList 把 4s 轮询的
+            // 比对基准刷新到最新，否则下一拍轮询会用旧签名把标题"闪"回旧值。
+            syncSessionTitle({ id: sid, title: saved });
+            refreshSessionList();
+            closeTitlePop();
+            showToast("标题已改成「" + saved + "」喵");
+        } catch (e) {
+            showToast("改标题失败了喵，再试一次？");
+        }
+    }
+
     // ===== 会话管理 =====
     function renderSidebarSessions(sessions, current) {
         sessionList.innerHTML = "";
@@ -243,7 +309,14 @@
             if (!detailResponse.ok || isWaiting || seq !== _syncSeq) return;
             const detail = await detailResponse.json();
             if (detail.session.id !== currentSessionId || isWaiting || seq !== _syncSeq) return;
-            currentSessionTitle = detail.session.title || "新对话";
+            // ★标题变了必须自己写 DOM：applyRemoteSessionMessages 在消息数没变时会提前
+            // return，光赋值不写 DOM 的话，自动提炼出来的新标题在顶栏根本看不见。
+            // （改名小窗开着时照写不误——他编辑的是小窗里的输入框，不是顶栏文字。）
+            const remoteTitle = detail.session.title || "新对话";
+            currentSessionTitle = remoteTitle;
+            if (curTitle.textContent !== remoteTitle) {
+                curTitle.textContent = remoteTitle;
+            }
             applyRemoteSessionMessages(detail.session.messages || []);
             if (seq === _syncSeq) remoteCurrentSessionRevision = revision;
         } catch (error) {
@@ -1950,6 +2023,24 @@
         if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); brandName.blur(); }
     });
     brandName.addEventListener("blur", endRename);
+
+    // 会话标题改名小窗（顶栏 ✎）
+    if (titleEditBtn) {
+        titleEditBtn.addEventListener("click", function (e) {
+            e.stopPropagation();  // 别冒泡到 document，否则"点 ✎ 开窗"会被外面的关闭handler立刻关掉
+            if (titlePopOpen()) closeTitlePop(); else openTitlePop();
+        });
+    }
+    titlePopOk.addEventListener("click", function (e) { e.stopPropagation(); commitTitlePop(); });
+    titlePopCancel.addEventListener("click", function (e) { e.stopPropagation(); closeTitlePop(); });
+    titlePop.addEventListener("click", function (e) { e.stopPropagation(); });  // 点窗内不关
+    titlePopInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); commitTitlePop(); }        // 回车 = 保存
+        else if (e.key === "Escape") { e.preventDefault(); closeTitlePop(); }   // Esc = 取消
+    });
+    // 点窗外任意处 = 取消（不保存）；窗口尺寸变了跟着挪位，别飘到标题外面去
+    document.addEventListener("click", function () { if (titlePopOpen()) closeTitlePop(); });
+    window.addEventListener("resize", function () { if (titlePopOpen()) placeTitlePop(); });
 
     // 侧栏折叠
     if (collapseBtn) {

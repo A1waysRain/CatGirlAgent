@@ -275,8 +275,59 @@ body::after {
 .cur-title h2 {
   font-size:15px; font-weight:700; letter-spacing:.3px;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  min-width:0; /* flex 子项默认 min-width:auto，不给 0 的话省略号顶不出来（加了铅笔按钮才有宽度压力） */
 }
 .cur-title span { font-size:12px; color:var(--ink-faint); flex-shrink:0; }
+
+/* 改会话标题的铅笔（顶栏）。
+   ⚠️ 不能复用 .name-edit：那个是 position:absolute + 靠 .brand:hover 显形，
+   而 .topbar/.cur-title 都没有 position → 搬过来会跑到角落且永不显形。
+   这里默认半可见（.4），保证顶栏这个位置能一眼发现可以改名。 */
+.cur-title .title-edit {
+  position:static; flex-shrink:0; padding:0;
+  border:none; background:var(--accent-soft); color:var(--accent-deep);
+  width:20px; height:20px; border-radius:50%; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  opacity:.4; transition: opacity .15s ease, background .15s ease;
+}
+.cur-title .title-edit:hover { opacity:1; background:var(--accent); }
+.cur-title .title-edit img { width:13px; height:13px; display:block; }
+/* 小窗开着时铅笔保持高亮，让"我正在改名"这件事看得见 */
+.cur-title .title-edit.active { opacity:1; background:var(--accent); }
+
+/* ===== 会话标题改名小窗（点顶栏 ✎ 弹出）=====
+   为什么不是就地编辑 <h2>：contenteditable 改标题只有一圈虚线框，跟平时几乎没差别，
+   体感上看不出"我进入编辑态了"（主人 2026-10-02 反馈）。改成弹一个小窗，一眼就知道。 */
+.title-pop {
+  position:fixed; z-index:70; width:272px;
+  display:flex; flex-direction:column; gap:9px;
+  padding:14px; border-radius:14px;
+  background:var(--card); border:1px solid var(--accent-border);
+  box-shadow:var(--shadow-lg);
+  animation:titlePopIn .15s ease-out;
+}
+.title-pop[hidden] { display:none; }
+@keyframes titlePopIn { from { opacity:0; transform:translateY(-7px) scale(.97); } to { opacity:1; transform:none; } }
+.title-pop-label { font-size:12px; font-weight:600; color:var(--ink-faint); letter-spacing:.4px; }
+.title-pop-input {
+  font-family:inherit; font-size:14px; color:var(--ink);
+  padding:9px 11px; border-radius:10px; width:100%;
+  border:1px solid var(--accent-border); background:var(--accent-softer);
+  outline:none; transition:border-color .15s ease, background .15s ease;
+}
+.title-pop-input::placeholder { color:var(--ink-faint); }
+.title-pop-input:focus { border-color:var(--accent); background:#fff; }
+.title-pop-actions { display:flex; gap:8px; justify-content:flex-end; }
+.title-pop-btn {
+  font-family:inherit; font-size:13px; font-weight:600;
+  padding:6px 15px; border-radius:10px; cursor:pointer;
+  border:1px solid transparent; transition:background .15s ease, color .15s ease, border-color .15s ease;
+}
+.title-pop-btn.ghost { background:transparent; border-color:var(--accent-border); color:var(--ink-soft); }
+.title-pop-btn.ghost:hover { color:var(--accent-deep); border-color:var(--accent); }
+.title-pop-btn.primary { background:var(--accent); color:#fff; }
+.title-pop-btn.primary:hover { background:var(--accent-deep); }
+.title-pop-btn:active { transform:scale(.97); }
 
 .clear-btn {
   justify-self: end;

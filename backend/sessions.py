@@ -2,7 +2,7 @@
 
 文件布局：
   %APPDATA%/catgirl/sessions/
-    <id>.json            # {"id","title","created_at","updated_at","messages":[...]}
+    <id>.json            # {"id","title","title_auto","created_at","updated_at","messages":[...]}
   %APPDATA%/catgirl/sessions_index.json   # {"current":"<id>","order":["<id>",...]}
 
 旧版单一 history.json 首次启动时自动迁移为「会话 1」。
@@ -156,6 +156,7 @@ def _new_session_record(title: str = "新会话") -> dict:
     return {
         "id": uuid.uuid4().hex[:12],
         "title": title,
+        "title_auto": True,  # 标题还是机器生成的（首条消息截 12 字），可被提炼覆盖；见 claim_title
         "created_at": now,
         "updated_at": now,
         "messages": [],
@@ -184,6 +185,7 @@ def _migrate_legacy() -> None:
         if not msgs:
             return
         session = _new_session_record("会话 1")
+        session["title_auto"] = False  # 迁移来的存量会话不参与自动起名（主人要求"已有的不动"）
         session["messages"] = msgs
         _save_session(session)
         _save_index({"current": session["id"], "order": [session["id"]]})
@@ -274,7 +276,15 @@ def delete_session(sid: str) -> dict:
             except Exception:
                 pass
             if index["current"] == sid:
-                remain = [s for s in index["order"] if _load_session(s)]
+                # ⚠️ 这里要的是「会话字典」列表，不是 id 字符串。
+                # 旧写法 `[s for s in index["order"] if _load_session(s)]` 收集的是 id（过滤条件
+                # 只用来筛、不改变元素），于是下一行 `s.get("updated_at")` 直接 AttributeError
+                # → **删「当前会话」时只要还剩别的会话就必崩 500**（2026-10-02 写标题测试时撞到并修）。
+                remain = []
+                for s in index["order"]:
+                    loaded = _load_session(s)
+                    if loaded:
+                        remain.append(loaded)
                 if remain:
                     remain.sort(key=lambda s: s.get("updated_at", 0), reverse=True)
                     index["current"] = remain[0]["id"]
@@ -296,11 +306,87 @@ def clear_session(sid: str) -> dict | None:
             return None
         session["messages"] = []
         session["title"] = "新会话"
+        session["title_auto"] = True  # 清空 = 回到全新状态，下一轮该重新起个好名字
         session["summary"] = []
         session["pending_alarm_batches"] = []
         session["pending_alarm_intent"] = None
         session["recent_media_refs"] = []
         session["updated_at"] = time.time()
+        _save_session(session)
+        return _summary(session)
+
+
+# ---------- 会话标题：自动提炼的「认领 / 落笔」，以及手动改名 ----------
+# title_auto=True 表示"标题还是机器生成的（首条消息截 12 字），可以被提炼覆盖"。
+# ⚠️ 老会话文件里没有这个字段 → session.get("title_auto") 为 None → falsy
+#    → 永远不会被自动起名（这就是主人要的"存量不动"，零迁移代码）。
+
+def claim_title(sid: str) -> str | None:
+    """认领这个会话的自动起名权。
+
+    成功返回**认领当时的标题**（当快照用），失败返回 None。在锁内先把 title_auto
+    置 False，所以并发的第二次调用必然拿不到——**去重是白送的**。
+
+    快照的用途：提炼要花几秒，期间主人可能手动改名、清空会话、删会话。
+    落笔时用 apply_title 比对快照，对不上就放弃，绝不拿旧对话的标题糊到新状态上。
+    """
+    with _lock:
+        _ensure_index()
+        session = _load_session(sid)
+        if not session or session.get("title_auto") is not True:
+            return None
+        prev = session.get("title") or "新会话"
+        session["title_auto"] = False
+        _save_session(session)
+        return prev
+
+
+def release_title_claim(sid: str, expected_prev: str) -> None:
+    """提炼失败时把认领权放回去（标题没被别人改过才放），让下一轮还有机会重试。
+
+    不然一次网络抖动就会让这个会话永远拿不到智能标题。
+    """
+    with _lock:
+        _ensure_index()
+        session = _load_session(sid)
+        if not session:
+            return
+        if (session.get("title") or "新会话") == expected_prev:
+            session["title_auto"] = True
+            _save_session(session)
+
+
+def apply_title(sid: str, title: str, expected_prev: str) -> bool:
+    """把提炼出的标题落笔；**仅当标题还是认领时那个**（没被改名/清空/重置）才写。
+
+    返回是否真的写进去了。故意不 bump updated_at——改标题不算"最近活跃"，
+    会话列表按 updated_at 排序的语义不该被改名搅乱。
+    """
+    with _lock:
+        _ensure_index()
+        session = _load_session(sid)
+        if not session:
+            return False
+        if (session.get("title") or "新会话") != expected_prev:
+            return False
+        session["title"] = title
+        _save_session(session)
+        return True
+
+
+def set_title(sid: str, title: str) -> dict | None:
+    """手动改名（线程安全）。会话不存在返回 None。
+
+    同时把 title_auto 置 False：**主人亲自起的名，不许被提炼覆盖**。
+    也不 bump updated_at（同 apply_title 的理由）。
+    """
+    with _lock:
+        _ensure_index()
+        session = _load_session(sid)
+        if not session:
+            return None
+        session["title"] = title
+        session["title_auto"] = False
         _save_session(session)
         return _summary(session)
 

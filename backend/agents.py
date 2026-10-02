@@ -167,6 +167,91 @@ async def distill_web(question: str, materials: str) -> dict:
         raise
 
 
+# ---------- 会话标题：把第一轮对话提炼成一个短标题 ----------
+
+# 中性、不带人设——这是工人在给会话起名，不是猫娘在跟主人说话
+TITLE_PROMPT = """你是给聊天会话起标题的工人，不是猫娘。不要撒娇、不要卖萌、不要和主人对话。
+根据下面这一轮对话，概括出主人这次在做什么，输出一个简短标题。
+
+规矩：
+- 只输出标题本身，**一行**，不要标点、不要引号、不要「标题：」这类前缀、不要解释。
+- 不超过 12 个字。
+- 写「在做什么」，不要照抄原句（例：主人说「帮我在微信和张永富发一句明天开会」→ 标题写「微信给张永富发消息」）。
+- 看不懂或信息太少时，就取这轮对话里最核心的名词短语，**绝不编造**。
+"""
+
+# 起标题只需要这一轮的要点：截断，免得主人一次粘贴几万字就整个发过去
+_TITLE_INPUT_CHARS = 1500
+
+# 标题不该带的尾标点，和会被模型包在标题外面的成对符号
+_TITLE_TAIL_PUNCT = "。，、；：！？~～.!?,;:…"
+_TITLE_WRAP_CHARS = "\"'“”‘’《》〈〉「」『』【】[]（）() \t"
+
+
+def _clean_title(text: str) -> str | None:
+    """把模型返回洗成能当标题的短字符串；洗不出来返回 None（调用方保留原截断标题）。"""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    raw = raw.splitlines()[0].strip()  # 模型偶尔多写一行解释，只取第一行
+    # 剥尾标点与包裹符号要来回两遍：「“标题”。」这种引号在标点里面，
+    # 只剥一遍会剩下一个孤零零的右引号（实测踩过）。
+    for _ in range(2):
+        raw = raw.rstrip(_TITLE_TAIL_PUNCT).strip()
+        raw = raw.strip(_TITLE_WRAP_CHARS)
+    raw = raw.rstrip(_TITLE_TAIL_PUNCT).strip()
+    # 「标题：xxx」这类前缀单独处理（它不在上面的成对符号里）
+    raw = re.sub(r"^(标题|题目|会话名|会话标题)\s*[:：]\s*", "", raw).strip(_TITLE_WRAP_CHARS)
+    if not raw:
+        return None
+    return raw[:20]
+
+
+async def distill_title(user_text: str, answer: str) -> str | None:
+    """一次独立低温度调用，把第一轮对话提炼成短标题；**失败一律返回 None**（不抛）。
+
+    与 distill_web 同款：不接收主对话 messages（上下文契约靠函数签名保证），
+    主循环零改动——对调用方就是一个"给文本、还可能失败"的普通函数。
+
+    ★`max_tokens` 同样必须给足，理由见 distill_web 的 docstring（这个模型先产思考
+      token 且**思考算在 completion 配额里**，给少了 content 恒为 0 字 → 白跑一次降级）。
+      这里输入比网页材料小得多，实际思考量也小，但上限不是预扣、用多少付多少，
+      所以直接沿用同一个 32000 省得再踩一遍。
+    """
+    started = time.monotonic()
+    user_text = (user_text or "").strip()
+    answer = (answer or "").strip()
+    if not user_text:
+        return None
+    payload = {
+        "model": settings.deepseek_model,
+        "messages": [
+            {"role": "system", "content": TITLE_PROMPT},
+            {"role": "user",
+             "content": f"主人：{user_text[:_TITLE_INPUT_CHARS]}\n\n猫娘：{answer[:_TITLE_INPUT_CHARS]}"},
+        ],
+        "temperature": 0.3,
+        "max_tokens": 32000,
+        "stream": False,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=max(120, int(settings.request_timeout))) as client:
+            response = await client.post(
+                settings.deepseek_base_url,
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {settings.deepseek_api_key}"},
+                json=payload,
+            )
+            response.raise_for_status()
+            content = response.json()["choices"][0]["message"].get("content", "")
+        title = _clean_title(content)
+        _log(f"distill_hook task=title out={len(content)}字 elapsed={time.monotonic()-started:.1f}s ok={bool(title)}")
+        return title
+    except Exception as exc:
+        # 与 distill_web 不同：这里**不抛**——起标题是锦上添花，失败了就保留原截断标题
+        _log(f"distill_hook task=title out=0字 elapsed={time.monotonic()-started:.1f}s ok=False error={type(exc).__name__}")
+        return None
+
+
 def stale_notice(report: dict) -> str:
     """报告里若**完全没有近期来源**，返回一句警示（供注入主对话时如实告知主人）。
 
