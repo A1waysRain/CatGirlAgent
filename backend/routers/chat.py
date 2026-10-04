@@ -488,6 +488,9 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     search_report = None
     search_req = _extract_search_request(request.chatmassage)
     prefer_browser = bool(load_settings().get("search_open_browser", True))
+    # 「猫娘能否自主联网」是独立开关（2026-10-04 主人拍板拆开）：关着时模型看不到
+    # 联网工具，只剩「明说搜/查」（本路由接管）与「RAG 没材料」（rag_query 内部接管）两条确定性路径。
+    auto_web = bool(load_settings().get("allow_auto_web_search", False))
     if search_req:
         _platform, _query = search_req
         if prefer_browser:
@@ -527,6 +530,11 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     msgs = build_messages(sid, recent)
     tools = list(TOOL_SCHEMAS)
     disabled_tools: set[str] = set()
+    if not auto_web:
+        # 关掉「允许猫娘主动联网」时，主 agent 不再拥有自主搜索能力；明确“搜/查”由本路由
+        # 上方确定性接管，RAG 未命中的升级则封装在 rag_query 内部。弹不弹浏览器是另一回事
+        # （search_open_browser 只管 _open_search，与本开关无关）。
+        disabled_tools.update({"web_search", "verify_current_fact", "distill_web"})
     if pinned_reference:
         msgs.insert(1, {"role": "system", "content": (
             "【系统通知，必须服从】主人刚才明确要求长期保留上一条可复用线索。"

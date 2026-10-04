@@ -64,4 +64,4 @@ desktop/app.py（pywebview 壳）
 - 中文 exe 名 OK（PyInstaller 6.22 直接生成正确文件名，终端里乱码只是 GBK 显示问题）。
 - build.spec：所有路径用 `SPECPATH`/项目根拼绝对路径；**不能 exclude tkinter**（桌宠窗口依赖）；`backend/maa_ops/worker.py` 是非 import 引用必须显式打进 datas；`--noconfirm` 不会清空 dist 子目录。
 - 教材在上级目录 `资料\`（流式输出/教学文档，行号与代码对应；改代码后跑 `tests/_verify_doc_lineref.py` 核对行号）。
-- 上级目录还有：`项目介绍.md`（能力总览）、`施工方向\`（方案 + 完成归档）、`更新日志-2026-10-02.md`（根目录，全量迭代史）、`换设备声明\`（换电脑部署说明）。根目录有 `CLAUDE.md` 总述各文件夹。
+- 上级目录还有：`项目介绍.md`（能力总览）、`施工方向\`（方案 + 完成归档）、`更新日志-2026-10-04.md`（根目录，全量迭代史）、`换设备声明\`（换电脑部署说明）。根目录有 `CLAUDE.md` 总述各文件夹。

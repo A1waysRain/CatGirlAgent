@@ -690,7 +690,10 @@ def main():
             assert "还没有可管理的保留项喵" in c4["text"], f"移除后应回空态: {c4['text']}"
             print("[17] 上下文保留项 OK | 默认收起→展开空态→种子出现(暂存)→固定(长期)→移除回空 全过")
 
-            # ---- 18. 联网搜索开关 + 免责小字（2026-09-27 新增） ----
+            # ---- 18. 联网双开关 + 免责小字（2026-09-27 建；2026-10-04 拆成两个开关）----
+            # 为什么是"两个"：搜索时弹浏览器（search_open_browser）与猫娘能否自主联网
+            # （allow_auto_web_search）是两件事，原先挤在一个字段上——关掉弹窗会连带
+            # 掐死模型自主核验，而默认开着又让"只有明说搜/查才联网"这条策略根本不生效。
             assert page.evaluate("document.getElementById('settingsOverlay').classList.contains('open')"), \
                 "设置浮层应仍开着"
             sw = page.evaluate("""() => {
@@ -700,10 +703,49 @@ def main():
                          groupText: group ? group.textContent : '' };
             }""")
             assert sw["has"], "缺少 searchBrowserSwitch 开关"
-            assert sw["checked"] is True, "默认应为开（保持原有弹窗行为）"
+            assert sw["checked"] is True, "弹窗开关默认应为开（保持原有弹窗行为）"
             assert "不保证准确" in sw["groupText"] and "联网搜索" in sw["groupText"], \
                 f"设置里应有搜索免责小字: {sw['groupText'][:80]}"
-            # 真实往返：关掉 → PUT 落盘 → 再读设置确认 false
+
+            # 工具栏那个「联网搜索：on/off」——文字形态，默认 off（=只认两条确定性触发）。
+            # 注意：设置浮层开着时会盖住聊天区，工具栏按钮点不到，所以先收起浮层，
+            # 点完再放回来（后面几节沿用"浮层开着"这个状态）。
+            page.evaluate("document.getElementById('settingsOverlay').classList.remove('open')")
+            page.wait_for_timeout(200)
+            tb = page.evaluate("""() => {
+                const b = document.getElementById('webSearchToggle');
+                const bar = document.querySelector('.chat-toolbar');
+                return { has: !!b, text: b ? b.textContent.trim() : '',
+                         on: b ? b.classList.contains('on') : null,
+                         inToolbar: !!(b && bar && bar.contains(b)),
+                         siblings: bar ? [...bar.querySelectorAll('.tool-btn')].map(x => x.id) : [] };
+            }""")
+            assert tb["has"] and tb["inToolbar"], f"工具栏里应有联网搜索开关: {tb}"
+            assert tb["text"] == "联网搜索：off" and tb["on"] is False, \
+                f"默认应显示「联网搜索：off」: {tb}"
+            for want in ("screenshotBtn", "uploadImageBtn", "uploadFileBtn"):
+                assert want in tb["siblings"], f"{want} 应与联网开关同区: {tb['siblings']}"
+            # 真实往返：点一下 → on + 落盘 true；再点 → off + 落盘 false
+            page.click("#webSearchToggle")
+            page.wait_for_timeout(600)
+            on_state = page.evaluate("""async () => ({
+                text: document.getElementById('webSearchToggle').textContent.trim(),
+                on: document.getElementById('webSearchToggle').classList.contains('on'),
+                saved: (await (await fetch('/api/settings')).json()).allow_auto_web_search,
+            })""")
+            assert on_state["text"] == "联网搜索：on" and on_state["on"] is True, f"点一下应变 on: {on_state}"
+            assert on_state["saved"] is True, f"on 应落盘 allow_auto_web_search=true: {on_state}"
+            page.click("#webSearchToggle")
+            page.wait_for_timeout(600)
+            off_state = page.evaluate("""async () => ({
+                text: document.getElementById('webSearchToggle').textContent.trim(),
+                saved: (await (await fetch('/api/settings')).json()).allow_auto_web_search,
+            })""")
+            assert off_state["text"] == "联网搜索：off" and off_state["saved"] is False, \
+                f"再点应回 off 并落盘 false: {off_state}"
+            # 弹窗开关仍是独立一路：关掉 → PUT 落盘 → 再读设置确认 false
+            page.evaluate("document.getElementById('settingsOverlay').classList.add('open')")
+            page.wait_for_timeout(200)
             # 注意：`.switch input` 是 opacity:0/0×0 的隐藏输入框，Playwright 点不到，
             # 必须点它外面的 label（.switch 本身），click 会转发给 input 并触发 change
             page.click("#group-search label.switch")
@@ -716,7 +758,8 @@ def main():
             page.wait_for_timeout(600)
             restored = page.evaluate("""async () => (await (await fetch('/api/settings')).json()).search_open_browser""")
             assert restored is True, f"应能再打开: {restored}"
-            print("[18] 联网搜索开关 OK | 默认开→关(落盘 false)→开(true)，免责小字在位")
+            print("[18] 联网双开关 OK | 工具栏「联网搜索：off→on→off」(+刷新读回) 与设置面板"
+                  "「搜索时弹出浏览器」默认开→关(落盘 false)→开(true) 两条路互不干扰，免责小字在位")
 
             # ---- [19] 来源面板（联网事实核验 M3，2026-09-30 新增）----
             # 为什么必须有这节：M3 上线时面板在「直播回复」里永远挂不上——onDone 里直接摸
@@ -863,6 +906,54 @@ def main():
             assert side2 == "自动提炼出来的标题", f"轮询也该刷新侧栏标题: {side2}"
             print("[20] 会话标题 OK | ✎弹小窗(可见/聚焦/带出当前名) + Enter 保存(关窗/侧栏同步/刷新仍在)"
                   " + Escape·点窗外·取消 三种不改 + 空白提示不关窗 + 后端改标题经轮询刷到顶栏")
+
+            # ---- [21] 侧栏底部留白只由 --func-lift 决定（别再被 JS 撑大压扁会话区）----
+            # 背景：原先 JS alignFuncBottom() 按「侧栏高 - 聊天输入框上沿 - 末项高/2」算 padding-bottom，
+            # 在 920×720 下撑到 104px 去跟输入框对齐；而历史会话区是 flex:1、**吃不到那块 padding**
+            # → 会话区只剩 78px（一行都显示不全）。主人 2026-10-02 看示意图后拍板：
+            # 留白改由 CSS 变量 --func-lift 显式控制（现在是 60px，即功能区往上抬 60px）。
+            # 这条断言钉住的正是根因：底部留白必须 == 14px + --func-lift，多出来的必是 JS 又撑回去了。
+            page.set_viewport_size({"width": 920, "height": 720})  # 与真实窗口同尺寸
+            page.wait_for_timeout(400)
+            box = page.evaluate("""() => {
+                const sb = document.querySelector('.sidebar');
+                const fl = document.querySelector('.func-list');
+                const s = sb.getBoundingClientRect(), f = fl.getBoundingClientRect();
+                return {
+                    gap: Math.round(s.bottom - f.bottom),
+                    lift: getComputedStyle(document.documentElement).getPropertyValue('--func-lift').trim(),
+                    sidebarH: Math.round(s.height),
+                    sessionH: Math.round(document.querySelector('.session-list').getBoundingClientRect().height),
+                };
+            }""")
+            lift = int((box["lift"] or "0").replace("px", "") or 0)
+            assert abs(box["gap"] - (14 + lift)) <= 2, \
+                (f"底部留白应只等于 14px + --func-lift({lift}px)，实测 {box['gap']}px —— "
+                 f"是不是又把 alignFuncBottom 那套'跟输入框对齐'加回来了？: {box}")
+            assert box["sessionH"] >= 80, \
+                f"历史会话区被压太扁（{box['sessionH']}px）——老 bug 在同样尺寸下是 78px，别回去: {box}"
+            print(f"[21] 侧栏留白 OK | --func-lift={lift}px（功能区底边距侧栏底 {box['gap']}px），"
+                  f"历史会话区 {box['sessionH']}px / 侧栏 {box['sidebarH']}px")
+
+            # ---- [22] 工具栏联网开关开机读回（放在最后：要 reload 页面，别扰乱前面各节）----
+            # 防止"DOM 初始 HTML 恰好写着 off、其实根本没从设置读"这种假通过。
+            page.evaluate("""async () => {
+                await fetch('/api/settings', {method:'PUT', headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({allow_auto_web_search: true})});
+            }""")
+            page.reload()
+            page.wait_for_timeout(1400)
+            after = page.evaluate("""() => {
+                const b = document.getElementById('webSearchToggle');
+                return { text: b.textContent.trim(), on: b.classList.contains('on') };
+            }""")
+            assert after["text"] == "联网搜索：on" and after["on"] is True, \
+                f"刷新后应从设置读回 on（不能只靠初始 HTML）: {after}"
+            page.evaluate("""async () => {
+                await fetch('/api/settings', {method:'PUT', headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({allow_auto_web_search: false})});
+            }""")
+            print("[22] 工具栏联网开关读回 OK | 落盘 true → reload → 显示「联网搜索：on」（已还原 false）")
 
             browser.close()
     finally:

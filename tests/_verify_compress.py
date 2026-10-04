@@ -106,14 +106,19 @@ print("== L2: build_messages 组装 ==")
 from backend.chat_service import build_messages
 m = build_messages(sid, [{"role": "user", "content": "还记得我之前说的吗"}])
 check("第一句是系统提示词", m[0]["role"], "system")
-check("第二句是小本本（有摘要时）", "猫娘的记忆小本本" in m[1]["content"], True)
-check("摘要内容带要点", "狮子座" in m[1]["content"], True)
+# 位置断言改成语义断言：2026-10-04 起默认档会在系统提示词之后插一条「联网搜索策略」
+# system 消息，小本本不再恒等于 m[1]。真正要守的是"小本本在、且在最近窗口之前"。
+_sum_idx = next((i for i, x in enumerate(m) if "猫娘的记忆小本本" in x.get("content", "")), -1)
+check("有小本本（有摘要时）", _sum_idx > 0, True)
+check("小本本排在最近窗口之前", 0 < _sum_idx < len(m) - 1, True)
+check("摘要内容带要点", "狮子座" in m[_sum_idx]["content"], True)
 check("最近窗口在最后", m[-1]["content"], "还记得我之前说的吗")
 
 print("== L2: 无摘要时不插小本本 ==")
 sid2 = __import__("backend.sessions", fromlist=["create_session"]).create_session()["id"]
 m2 = build_messages(sid2, [{"role": "user", "content": "hi"}])
-check("无摘要只有系统+窗口", len(m2), 2)
+check("无摘要时全程不含小本本", any("猫娘的记忆小本本" in x.get("content", "") for x in m2), False)
+check("无摘要时窗口仍在最后", m2[-1]["content"], "hi")
 
 
 print("== L2: API GET/DELETE summary ==")

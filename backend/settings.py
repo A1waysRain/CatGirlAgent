@@ -8,7 +8,8 @@
 - font_scale         聊天字体缩放
 - show_timestamp     消息是否显示时间
 - user_avatar / cat_avatar  聊天头像文件名（img/ 下）
-- search_open_browser  联网搜索是否弹出浏览器（关掉则只读内容、不弹窗）
+- search_open_browser  主人说「搜/查」时是否弹出浏览器（默认开；关掉则只读内容不弹窗）
+- allow_auto_web_search 猫娘能否自主联网（默认关：只认「明说搜/查」和「知识库没材料」两条确定性触发）
 """
 import json
 import os
@@ -44,8 +45,11 @@ DEFAULTS = {
     "lan_ip": "",
     "lan_port": 8800,
     "lan_token": "",
-    # 联网搜索是否弹出浏览器：开着=浏览器给主人看 + 猫娘同时读内容；关掉=只读内容不弹窗
+    # 主人说「搜/查」时是否弹出浏览器给主人看（关掉则只读内容、不弹窗）
     "search_open_browser": True,
+    # 猫娘能否自主联网（默认关，2026-10-04 主人拍板）：关=只有「主人明说搜/查」和
+    # 「RAG 知识库明确没材料」两条确定性路径会联网，模型不得因“最新/赛程/天气”自行核验
+    "allow_auto_web_search": False,
 }
 
 

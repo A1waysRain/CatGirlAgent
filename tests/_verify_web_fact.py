@@ -329,8 +329,11 @@ try:
     # ★Bing RSS 带 mkt=zh-CN 时 pubDate 是中文格式——认不出就会静默漏掉过期来源（实测踩过）
     check("★中文市场 pubDate 能解析（日 月 年）",
           tools._fact_age_days("周二, 10 6月 2025 13:46:00 GMT") > 365)
+    today = tools.datetime.datetime.now().date()
+    current_cn_pubdate = f"周日, {today.day} {today.month}月 {today.year} 12:53:00 GMT"
+    current_age = tools._fact_age_days(current_cn_pubdate)
     check("★中文市场 pubDate 当天不误判过期",
-          (tools._fact_age_days("周六, 26 9月 2026 12:53:00 GMT") or 999) <= 2)
+          current_age is not None and current_age <= 2)
     check("中文年月日能解析", tools._fact_age_days("2020年9月26日") > 365)
     check("非法日期不崩", tools._fact_age_days("99 13月 2026") is None)
 

@@ -197,6 +197,7 @@ ok("构建中返回 building", s5 is False and ctx5 == "building")
 rag._building = False
 
 print("\nE) 工具分发 rag_query")
+import backend.tools as tools_mod  # noqa: E402
 from backend.tools import TOOL_IMPL, TOOL_SCHEMAS, run_tool  # noqa: E402
 ok("TOOL_IMPL 注册 rag_query", "rag_query" in TOOL_IMPL)
 sch = next((x for x in TOOL_SCHEMAS if x["function"]["name"] == "rag_query"), None)
@@ -206,12 +207,62 @@ rag.ensure_index(block=True)
 out = run_tool("rag_query", {"query": "什么是检索增强生成", "top_k": 2})
 ok("run_tool 走通返回片段", "a.md" in out and "检索增强" in out)
 reset_rag(tmpE)
+# 这两条只测 rag_query 自己的话术，所以先切到「允许主动联网」档：窄模式（默认）下
+# empty/nomatch 会直接升级去联网，这里就跑不到老话术、还会真的发网络请求（慢且不确定）。
+# 窄模式的升级行为由下面那一节专门验证。
+tools_mod.load_settings = lambda: {"allow_auto_web_search": True}
 out_empty = run_tool("rag_query", {"query": "x"})
 ok("空知识库引导话术", "还是空的" in out_empty)
 reset_rag(tmp2)
 rag.ensure_index(block=True)
 out_nomatch = run_tool("rag_query", {"query": "今天天气怎么样"})
 ok("没找到话术", "没找到" in out_nomatch)
+
+# 关闭「允许猫娘主动联网」（=默认档）：只有 RAG 明确 empty/nomatch 后才确定性升级联网；
+# 命中路径在上面已验证，不应触发这个桩。返回结构同时给模型证据、给会话层来源与生命周期元数据。
+_real_load_settings = tools_mod.load_settings
+_real_verify_fact = tools_mod.tool_verify_current_fact
+tools_mod.load_settings = lambda: {"allow_auto_web_search": False}
+_web_calls = []
+def _fake_verify(query, **kwargs):
+    _web_calls.append(query)
+    return __import__("json").dumps({
+    "status": "verified", "confidence": "medium", "checked_at": "2026-10-04T12:00:00+0800",
+    "elapsed_s": 1.2, "cache": "miss", "evidence": {"full": 1, "snippet": 0, "none": 0, "independent_domains": 1},
+    "sources": [{"title": "联网资料", "url": "https://example.com/fact", "domain": "example.com",
+                 "published": "2026-10-04", "grade": "full", "extract": "今天天气怎么样，联网资料正文" * 40}],
+    "caveats": [],
+}, ensure_ascii=False)
+tools_mod.tool_verify_current_fact = _fake_verify
+reset_rag(tmp2)
+rag.ensure_index(block=True)
+hit_closed = run_tool("rag_query", {"query": "什么是检索增强生成", "top_k": 2})
+ok("关开关：RAG 命中不升级联网", "a.md" in hit_closed and not _web_calls)
+fallback = __import__("json").loads(run_tool("rag_query", {"query": "今天天气怎么样"}))
+ok("关开关：RAG nomatch 确定性升级联网", fallback.get("kind") == "rag_web_fallback")
+ok("RAG nomatch 只触发一次联网", _web_calls == ["今天天气怎么样"])
+ok("RAG 联网升级带证据和来源", "example.com" in fallback.get("evidence", "") and fallback.get("fact_refs"))
+ok("RAG 联网升级带核验元数据", fallback.get("fact_meta", {}).get("query") == "今天天气怎么样")
+tools_mod.tool_verify_current_fact = lambda query, **kwargs: __import__("json").dumps({
+    "status": "failed", "confidence": "low", "sources": [], "evidence": {"full": 0}
+}, ensure_ascii=False)
+failed_fallback = run_tool("rag_query", {"query": "今天天气怎么样"})
+ok("RAG 联网无正文时如实失败", "没读到可用正文" in failed_fallback and "不能确认" in failed_fallback)
+# 打开该开关（=允许主动联网）→ 升级链不再接管：模型自己就有 verify_current_fact，
+# 由它决定要不要查，避免后端替它把网络请求跑掉。
+tools_mod.load_settings = lambda: {"allow_auto_web_search": True}
+_web_calls.clear()
+tools_mod.tool_verify_current_fact = _fake_verify
+out_open = run_tool("rag_query", {"query": "今天天气怎么样"})
+ok("开开关：RAG nomatch 不再确定性升级（交回模型）",
+   not _web_calls and "rag_web_fallback" not in out_open and "没找到" in out_open)
+# 老配置缺字段时按默认关（否则老用户升级后会静默失去这条确定性链）
+tools_mod.load_settings = lambda: {"search_open_browser": True}
+_web_calls.clear()
+out_legacy = run_tool("rag_query", {"query": "今天天气怎么样"})
+ok("★缺字段：按默认关 → 升级链生效", bool(_web_calls) and "rag_web_fallback" in out_legacy)
+tools_mod.load_settings = _real_load_settings
+tools_mod.tool_verify_current_fact = _real_verify_fact
 def _boom(q, k):
     raise RuntimeError("boom")
 rag.search = _boom

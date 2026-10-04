@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>猫娘来咯</title>
+  <link rel="icon" href="/img/cat.png">
   <link rel="stylesheet" href="/css/style.css">
   <link rel="stylesheet" href="/css/mobile.css">
 </head>
@@ -17,6 +18,10 @@
     <aside id="sessionsPanel" class="mobile-sessions" hidden><div id="sessionsList"></div></aside>
     <section id="chat" class="mobile-chat" aria-live="polite"></section>
     <form id="composer" class="mobile-composer">
+      <div class="mobile-tools">
+        <button id="webSearchToggle" type="button" class="mobile-web-toggle"
+                title="猫娘能否自己上网查。关（默认）：只有你说「搜/查」或知识库没材料时才联网">联网搜索：off</button>
+      </div>
       <textarea id="input" rows="1" maxlength="6000" placeholder="和猫娘说点什么…"></textarea>
       <button id="send" type="submit">发送</button>
     </form>

@@ -291,7 +291,20 @@ async def call_deepseek_with_tools_stream(
                         if state is not None:
                             # 只记工具名，供会话层给最终结论选择生命周期；不把参数或返回值
                             # 再持久化，避免敏感内容和长 OCR 结果混入聊天记忆。
-                            state.setdefault("tool_trace", []).append(name)
+                            traced_name = name
+                            rag_fallback = None
+                            if name == "rag_query":
+                                try:
+                                    parsed = json.loads(result)
+                                    if parsed.get("kind") == "rag_web_fallback":
+                                        rag_fallback = parsed
+                                        traced_name = "verify_current_fact"
+                                except (TypeError, json.JSONDecodeError, AttributeError):
+                                    pass
+                            state.setdefault("tool_trace", []).append(traced_name)
+                            if rag_fallback:
+                                state.setdefault("fact_refs", []).extend(rag_fallback.get("fact_refs") or [])
+                                state["fact_meta"] = rag_fallback.get("fact_meta") or {}
                             if name == "verify_current_fact":
                                 try:
                                     from .tools import fact_references, fact_metadata

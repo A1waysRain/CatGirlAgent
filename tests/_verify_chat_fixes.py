@@ -15,6 +15,7 @@ from types import SimpleNamespace
 sys.path.insert(0, ".")
 
 import backend.routers.chat as chat_mod
+import backend.chat_service as chat_service_mod
 from backend.routers.chat import _extract_alarm_request as F
 
 _tmp_dirs = []
@@ -99,6 +100,14 @@ check("『不要忘了晚上八点提醒我』仍建（肯定句豁免）", bool
 
 print("===== 2. chat() 工具过滤覆盖 =====")
 fresh_appdata()
+
+# 本节测的是"确定性命令分支别把工具摘错/加回来"，基线必须用完整工具集，所以先把联网
+# 策略切到「允许主动联网」档。窄模式（默认档）会摘掉 web_search/verify_current_fact/
+# distill_web 三个工具 —— 那是本节末尾「关开关」那几节专测的行为，别混进来当基线。
+_true_chat_load = chat_mod.load_settings
+_true_service_load = chat_service_mod.load_settings
+chat_mod.load_settings = lambda: {"search_open_browser": True, "allow_auto_web_search": True}
+chat_service_mod.load_settings = lambda: {"search_open_browser": True, "allow_auto_web_search": True}
 
 # 打桩 stream_answer：记录收到的 tools，不做任何真实调用
 captured = {}
@@ -213,6 +222,52 @@ async def run():
           "verify_current_fact" in c["write_state"].get("tool_trace", []),
           str(c["write_state"]))
 
+    # 「允许猫娘主动联网」= allow_auto_web_search（2026-10-04 与弹窗开关拆开后独立）。
+    # 关闭（默认）：普通聊天里主 agent 不能因“最新/赛程”等词自行联网；rag_query 保留，
+    # 知识库无材料时由它内部确定性升级。★这一档是默认行为，所以"键都不给"也要生效。
+    _real_service_load = chat_service_mod.load_settings
+    _real_chat_load_aw = chat_mod.load_settings
+    chat_service_mod.load_settings = lambda: {"allow_auto_web_search": False}
+    chat_mod.load_settings = lambda: {"allow_auto_web_search": False}
+    c = await call_chat("猜猜今天谁拿了杆位")
+    check("关开关：普通聊天移除自主联网工具",
+          all(t not in c["tools"] for t in ("web_search", "verify_current_fact", "distill_web")), str(c["tools"]))
+    check("关开关：仍保留 RAG 确定性升级入口", "rag_query" in c["tools"])
+    policy = " ".join(m.get("content", "") for m in c["msgs"] if m["role"] == "system")
+    check("关开关：动态策略禁止猜谜时联网", "主人说‘猜猜’" in policy and "不得为了揭晓答案擅自搜索" in policy)
+
+    # 老配置里没有这个字段时按默认关（否则老用户升级后会静默保持"自主联网"）
+    chat_mod.load_settings = lambda: {"search_open_browser": True}
+    chat_service_mod.load_settings = lambda: {"search_open_browser": True}
+    c = await call_chat("猜猜今天谁拿了杆位")
+    check("缺字段：按默认关（不含自主联网工具）",
+          all(t not in c["tools"] for t in ("web_search", "verify_current_fact", "distill_web")), str(c["tools"]))
+    check("缺字段：仍注入禁联网策略",
+          "不得为了揭晓答案擅自搜索" in " ".join(m.get("content", "") for m in c["msgs"] if m["role"] == "system"))
+
+    # 打开这个开关 → 工具集与提示词恢复成"允许主动核验"的老行为
+    chat_mod.load_settings = lambda: {"search_open_browser": True, "allow_auto_web_search": True}
+    chat_service_mod.load_settings = lambda: {"search_open_browser": True, "allow_auto_web_search": True}
+    c = await call_chat("猜猜今天谁拿了杆位")
+    check("开开关：自主联网工具都回来",
+          all(t in c["tools"] for t in ("web_search", "verify_current_fact", "distill_web")), str(c["tools"]))
+    check("开开关：不再注入禁联网策略",
+          "不得为了揭晓答案擅自搜索" not in " ".join(m.get("content", "") for m in c["msgs"] if m["role"] == "system"))
+
+    # ★弹窗开关与自主联网开关必须解耦：关弹窗不再连带掐掉模型自主联网（10-04 拆开的理由）
+    chat_mod.load_settings = lambda: {"search_open_browser": False, "allow_auto_web_search": True}
+    chat_service_mod.load_settings = lambda: {"search_open_browser": False, "allow_auto_web_search": True}
+    c = await call_chat("猜猜今天谁拿了杆位")
+    check("★解耦：关弹窗但允许自主联网 → 联网工具仍在",
+          all(t in c["tools"] for t in ("web_search", "verify_current_fact", "distill_web")), str(c["tools"]))
+    c = await call_chat("搜一下原神新版本")
+    search_note = " ".join(m.get("content", "") for m in c["msgs"] if m["role"] == "system")
+    check("★解耦：关弹窗时“搜”仍读内容、仍不弹窗",
+          opened == [] and "example.com" in search_note and "没有打开浏览器" in search_note, str(opened))
+
+    chat_mod.load_settings = _real_chat_load_aw
+    chat_service_mod.load_settings = _real_service_load
+
     # B站搜 + 关弹窗：既没开浏览器也没有正文可读 → 如实说明，不许装作打开了
     c = await call_chat("B站搜 原神")
     search_note = " ".join(m.get("content", "") for m in c["msgs"] if m["role"] == "system")
@@ -270,6 +325,10 @@ async def run():
 
 
 asyncio.run(run())
+
+# 本节开头为了拿完整工具集装上的联网策略桩，用完必须摘掉（后面各节要真 load_settings）
+chat_mod.load_settings = _true_chat_load
+chat_service_mod.load_settings = _true_service_load
 
 print("===== 3. regenerate 加固（恢复/精简工具/审计/取消） =====")
 import backend.sessions as sess_mod

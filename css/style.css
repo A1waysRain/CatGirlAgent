@@ -27,6 +27,7 @@
   --avt: 44px;         /* 左上猫娘头像宽：图标条触发基准（侧栏收窄到正好贴合头像） */
   --icon-pad-x: 6px;   /* 图标条态侧栏的横向内边距（两侧各 6px） */
   --icon-floor: calc(var(--avt) + 2 * var(--icon-pad-x));  /* 侧栏最窄 = 头像 + 图标条内边距 */
+  --func-lift: 60px;   /* 功能区相对侧栏底「抬起」多少（0 = 贴底）。调这一个数就能上下挪功能区 */
   --font-scale: 1;     /* 聊天字体缩放（设置里调） */
 }
 
@@ -68,7 +69,10 @@ body::after {
   background: var(--paper-deep);
   border-right:1px solid var(--line);
   display:flex; flex-direction:column;
-  padding: 20px 14px 14px;
+  /* 底部内边距 = 正常留白 + 功能区抬起的距离（--func-lift）。
+     注意：这块 padding 的历史会话区（flex:1）吃不到，抬得越多会话区越矮 ——
+     改 --func-lift 前先想清楚在拿会话区的空间换什么。 */
+  padding: 20px 14px calc(14px + var(--func-lift));
   gap: 4px;
   overflow: hidden;
   transition: width .18s ease;
@@ -191,7 +195,10 @@ body::after {
 }
 .session-item.active .tt { color: var(--ink); }
 
-/* 功能入口：吸底，使「插件」中心线与聊天输入框上沿齐平（padding-bottom 由 JS 精确设置） */
+/* 功能入口：吸底（margin-top:auto），直接贴到侧栏底部。
+   原先还有个 JS(alignFuncBottom) 把侧栏 padding-bottom 撑大去跟输入框上沿对齐，
+   会在底部留一大片死白、而 flex:1 的会话列表吃不到 —— 2026-10-02 主人拍板去掉，
+   把空间还给历史会话区。别再把它加回来。 */
 .func-list {
   display:flex; flex-direction:column; gap:2px;
   margin-top:auto; padding-top: 6px;
@@ -534,6 +541,14 @@ body::after {
 }
 .tool-btn:hover { color:#fff; background:var(--accent); border-color:var(--accent); transform: translateY(-1px); }
 .tool-btn:active { transform: translateY(0) scale(.97); }
+
+/* 工具栏「联网搜索：on/off」：状态型按钮（不像截图/上传那样是个动作），靠右独立站着。
+   on 用浅色底常驻显示，一眼能看出猫娘现在能不能自己上网；off 就是普通灰按钮。 */
+.web-toggle { margin-left:auto; letter-spacing:.2px; }
+.web-toggle.on {
+  background: var(--accent-soft); border-color: var(--accent); color: var(--accent-deep);
+}
+.web-toggle.on:hover { color:#fff; background:var(--accent); }
 
 .input-wrapper {
   display:flex; align-items:flex-end; gap:10px;

@@ -2,6 +2,7 @@
   "use strict";
   const chat = document.getElementById("chat"), input = document.getElementById("input"), send = document.getElementById("send");
   const panel = document.getElementById("sessionsPanel"), list = document.getElementById("sessionsList"), title = document.getElementById("title");
+  const webToggle = document.getElementById("webSearchToggle");
   let current = null, sending = false, avatars = { user: "/img/user.jpg", cat: "/img/cat.png" };
 
   function esc(text) { const d = document.createElement("div"); d.textContent = text || ""; return d.innerHTML; }
@@ -15,6 +16,14 @@
   document.getElementById("sessionsButton").onclick = () => { panel.hidden = !panel.hidden; };
   document.getElementById("newButton").onclick = async () => { const data = await request("/api/sessions", {method:"POST"}); await select(data.current); };
   document.getElementById("composer").onsubmit=submit;
+  // 联网搜索开关（跟桌面工具栏同一个字段 allow_auto_web_search；type=button 别触发表单提交）
+  function renderWebSearchToggle(on) { webToggle.textContent = "联网搜索：" + (on ? "on" : "off"); webToggle.classList.toggle("on", !!on); }
+  webToggle.onclick = async () => {
+    const next = !webToggle.classList.contains("on");
+    renderWebSearchToggle(next);                    // 立即反馈，不等保存往返
+    try { const s = await request("/api/settings", {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({allow_auto_web_search:next})}); renderWebSearchToggle(!!s.allow_auto_web_search); }
+    catch (e) { renderWebSearchToggle(!next); }     // 保存失败就弹回去，别显示假状态
+  };
   input.addEventListener("input", () => { input.style.height="auto"; input.style.height=Math.min(input.scrollHeight,120)+"px"; });
-  (async function init(){ try { const s = await request("/api/settings"); avatars={user:"/img/"+(s.user_avatar||"user.jpg"),cat:"/img/"+(s.cat_avatar||"cat.png")}; document.getElementById("subtitle").textContent=(s.pet_name||"猫娘")+" · 手机接入"; const id=await loadSessions(); await select(id); } catch(e) { chat.innerHTML='<p class="mobile-empty">连接失败，请回电脑检查手机接入设置。</p>'; } })();
+  (async function init(){ try { const s = await request("/api/settings"); avatars={user:"/img/"+(s.user_avatar||"user.jpg"),cat:"/img/"+(s.cat_avatar||"cat.png")}; document.getElementById("subtitle").textContent=(s.pet_name||"猫娘")+" · 手机接入"; renderWebSearchToggle(s.allow_auto_web_search === true); const id=await loadSessions(); await select(id); } catch(e) { chat.innerHTML='<p class="mobile-empty">连接失败，请回电脑检查手机接入设置。</p>'; } })();
 }());

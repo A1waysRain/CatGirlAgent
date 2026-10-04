@@ -9,6 +9,7 @@ import httpx
 from .llm import SYSTEM_PROMPT_CHAT, call_deepseek_with_tools_stream
 from .mood import infer_mood
 from .notifier import notifier
+from .settings import load_settings
 from .sessions import append_message as session_append, get_session, get_summary
 from .summary import maybe_summarize
 from .title import maybe_title
@@ -158,6 +159,17 @@ def build_messages(sid: str, recent: list) -> list[dict]:
     摘要段只追加不重写 → system+旧摘要+当前提醒 是稳定前缀，保住 DeepSeek 前缀缓存。
     """
     msgs = [{"role": "system", "content": SYSTEM_PROMPT_CHAT}]
+    if not load_settings().get("allow_auto_web_search", False):
+        msgs.append({"role": "system", "content": (
+            "【联网搜索策略（「允许猫娘主动联网」已关闭，优先级高于上文通用规则）】"
+            "绝不因‘最新/今天/赛程/天气/政策/版本’等话题自行调用联网工具。"
+            "只有两条确定性路径允许联网：①主人明确说‘搜/查’时由后端自动完成；"
+            "②你判断问题属于教材/项目知识而调用 rag_query，且知识库明确返回 empty/nomatch 时，"
+            "rag_query 内部自动升级联网。除此之外不得自行联网。"
+            "回答时效性话题而本轮没有核验证据时，必须说明‘这是本喵印象里的，可能已经过时’，"
+            "绝不能当成当前确定事实，更不能质疑主人；可以问主人要不要明确让你去查。"
+            "主人说‘猜猜’是在邀请互动，不得为了揭晓答案擅自搜索。"
+        )})
     summary = get_summary(sid)
     if summary:
         seg_text = "\n".join(f"· {s.get('text','')}" for s in summary)

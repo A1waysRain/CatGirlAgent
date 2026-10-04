@@ -130,15 +130,10 @@
         sidebar.classList.toggle("icon-bar", w <= avt + 2 * pad + 0.5);
     }
 
-    function alignFuncBottom() {
-        // 使「插件」中心线与聊天输入框上沿齐平（padding-bottom 由 JS 精确设置）
-        const sidebar = document.querySelector(".sidebar");
-        const lastFunc = document.querySelector(".func-list .func-item:last-child");
-        const inputArea = document.querySelector(".input-area");
-        if (!sidebar || !lastFunc || !inputArea) return;
-        const pad = sidebar.getBoundingClientRect().height - inputArea.getBoundingClientRect().top - lastFunc.getBoundingClientRect().height / 2;
-        sidebar.style.paddingBottom = Math.max(14, pad) + "px";
-    }
+    // 注：原先这里有个 alignFuncBottom()，把侧栏 padding-bottom 撑大，好让最后一个功能项
+    // 的中心线与聊天输入框上沿齐平。副作用是侧栏底部留出一大片死白（高窗下约 200px），
+    // 而历史会话区是 flex:1 —— 这块 padding 它吃不到，所以会话列表白白少一截。
+    // 主人 2026-10-02 看示意图后拍板：去掉留白、功能区直接贴底，把空间还给历史会话区。
 
     // ===== 品牌改名（同步 pet_name 设置） =====
     function startRename() {
@@ -1833,6 +1828,8 @@
         document.getElementById("soundSwitch").checked = !!settings.notification_sound;
         // 默认开（老配置里没这个字段也当开）
         document.getElementById("searchBrowserSwitch").checked = settings.search_open_browser !== false;
+        // 默认关（10-04 拍板：只认「明说搜/查」和「知识库没材料」两条确定性触发）
+        renderWebSearchToggle(settings.allow_auto_web_search === true);
         const closeBehaviorSelect = document.getElementById("closeBehaviorSelect");
         if (closeBehaviorSelect) {
             closeBehaviorSelect.value = settings.close_behavior === "exit" ? "exit" : "tray";
@@ -2046,7 +2043,7 @@
     if (collapseBtn) {
         collapseBtn.addEventListener("click", function () {
             document.body.classList.toggle("sidebar-collapsed");
-            setTimeout(function () { alignFuncBottom(); updateSidebarFade(); }, 320);
+            setTimeout(function () { updateSidebarFade(); }, 320);
         });
     }
 
@@ -2054,10 +2051,10 @@
     const sidebarEl = document.querySelector(".sidebar");
     if (sidebarEl) {
         sidebarEl.addEventListener("transitionend", function (e) {
-            if (e.propertyName === "width") { updateSidebarFade(); alignFuncBottom(); }
+            if (e.propertyName === "width") { updateSidebarFade(); }
         });
     }
-    window.addEventListener("resize", function () { updateSidebarFade(); alignFuncBottom(); });
+    window.addEventListener("resize", function () { updateSidebarFade(); });
 
     // 设置面板开关
     document.getElementById("showPetSwitch").addEventListener("change", e => saveSetting("show_pet", e.target.checked));
@@ -2090,6 +2087,25 @@
     });
     document.getElementById("soundSwitch").addEventListener("change", e => saveSetting("notification_sound", e.target.checked));
     document.getElementById("searchBrowserSwitch").addEventListener("change", e => saveSetting("search_open_browser", e.target.checked));
+
+    // 工具栏「联网搜索：on/off」——控的是「猫娘能否自己上网」这个开关，跟设置面板里
+    // 那个「搜索时弹出浏览器」是两码事（前者管她自不自主联网，后者管明说搜时弹不弹窗）。
+    const webSearchToggle = document.getElementById("webSearchToggle");
+    function renderWebSearchToggle(on) {
+        if (!webSearchToggle) return;
+        webSearchToggle.textContent = "联网搜索：" + (on ? "on" : "off");
+        webSearchToggle.title = on
+            ? "猫娘能自己上网核验时效性问题（点一下关掉）"
+            : "只有你说「搜/查」或知识库没材料时才联网（点一下允许她自己上网）";
+        webSearchToggle.classList.toggle("on", !!on);
+    }
+    if (webSearchToggle) {
+        webSearchToggle.addEventListener("click", function () {
+            const next = !webSearchToggle.classList.contains("on");
+            renderWebSearchToggle(next);        // 立即反馈，不等保存往返
+            saveSetting("allow_auto_web_search", next);
+        });
+    }
 
     // 点击关闭时的行为（仅隐藏到托盘 / 直接退出）
     const closeBehaviorSelect = document.getElementById("closeBehaviorSelect");
@@ -2202,7 +2218,6 @@
     window.addEventListener("pywebviewready", refreshLanIps);
     loadAppsStatus();
     updateSidebarFade();
-    alignFuncBottom();
     messageInput.focus();
     startChatAlertPoll();
     setInterval(syncRemoteSessions, 4000);

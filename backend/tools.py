@@ -2218,7 +2218,8 @@ def fact_metadata(report: dict | None, query: str = "", freshness: str = "curren
             "independent_domains": evidence.get("independent_domains", 0)}
 
 
-def fact_brief(query: str, max_sources: int = 4, limit: int = _FACT_BRIEF_LIMIT) -> str:
+def fact_brief(query: str, max_sources: int = 4, limit: int = _FACT_BRIEF_LIMIT,
+               report: dict | None = None) -> str:
     """把一次事实核验压成模型可直接阅读的证据段；读不到正文返回空串。
 
     预算规则：**头部状态行与末尾「限制」行一定保住**（模型靠它们判断证据强弱与时效），
@@ -2226,7 +2227,7 @@ def fact_brief(query: str, max_sources: int = 4, limit: int = _FACT_BRIEF_LIMIT)
     "本条过长已截断"——让模型知道这条没看全，而不是把半截内容当完整结论讲。
     """
     try:
-        report = json.loads(tool_verify_current_fact(query, max_sources=max_sources))
+        report = report or json.loads(tool_verify_current_fact(query, max_sources=max_sources))
         if not isinstance(report, dict) or report.get("status") == "failed":
             return ""
         evidence = report.get("evidence") or {}
@@ -2908,9 +2909,25 @@ def tool_rag_query(query: str, top_k: int = 3) -> str:
         return f"知识库检索失败喵：{e}"
     if not ok:
         return "知识库正在第一次构建（要几十秒），主人稍等几秒再问喵"
-    if ctx == "empty":
-        return "知识库还是空的，主人可在设置里导入 .md/.txt/.docx/.xlsx 文件，或放进知识库目录（%APPDATA%\\catgirl\\rag_data\\docs）喵，本喵就能按内容查了"
-    if ctx == "nomatch":
+    if ctx in {"empty", "nomatch"}:
+        if not load_settings().get("allow_auto_web_search", False):
+            try:
+                report = json.loads(tool_verify_current_fact(query, max_sources=4))
+                brief = fact_brief(query, max_sources=4, report=report)
+                if brief:
+                    return json.dumps({
+                        "kind": "rag_web_fallback",
+                        "notice": "知识库没有相关材料，系统已按关闭联网开关时的确定性规则升级为联网核验。",
+                        "evidence": brief,
+                        "fact_refs": fact_references(report),
+                        "fact_meta": fact_metadata(report, query, "current"),
+                    }, ensure_ascii=False)
+                return "知识库没有相关材料；确定性联网也没读到可用正文，不能确认答案喵"
+            except Exception as exc:
+                _log(f"rag_web_fallback failed {type(exc).__name__}")
+                return "知识库没有相关材料；确定性联网核验失败，不能确认答案喵"
+        if ctx == "empty":
+            return "知识库还是空的，主人可在设置里导入 .md/.txt/.docx/.xlsx 文件，或放进知识库目录（%APPDATA%\\catgirl\\rag_data\\docs）喵，本喵就能按内容查了"
         return "知识库里没找到和这个问题相关的片段喵（教材/项目文档里可能没写这个）"
     return ctx
 
@@ -3047,7 +3064,7 @@ TOOL_SCHEMAS = [
     ),
     _fn(
         "rag_query",
-        "从猫娘的知识库（学习教材 + 项目文档）按语义检索相关片段。主人问概念/术语/教材内容/猫娘某个功能怎么实现时用（如「RAG是什么」「流式输出怎么实现」「猫娘的上下文压缩怎么做的」）。按查到的片段回答并报出来源；资料里没有的别说有。",
+        "从猫娘的知识库（学习教材 + 项目文档）按语义检索相关片段。主人问概念/术语/教材内容/猫娘某个功能怎么实现时用（如「RAG是什么」「流式输出怎么实现」「猫娘的上下文压缩怎么做的」）。按查到的片段回答并报出来源；关闭主动联网开关时，知识库明确无材料会由本工具确定性升级联网，必须按返回证据回答；两边都没有就如实说不能确认。",
         {
             "query": {"type": "string", "description": "主人的问题原样，越具体越好（如：什么是检索增强生成）"},
             "top_k": {"type": "integer", "description": "返回几条片段，默认3（越小越省 token）"},
