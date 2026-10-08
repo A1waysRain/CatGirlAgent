@@ -107,8 +107,8 @@ async def run() -> None:
         remote_cookie = r.cookies.get(lan.COOKIE_NAME)
         r = await remote.get("/api/sessions")
         check("隧道登录后会话可用", r.status_code == 200)
-        r = await asyncio.wait_for(remote.head("/js/app_m.js"), timeout=10)
-        check("隧道登录后移动脚本可用", r.status_code == 200)
+        # 静态脚本由 StaticFiles 处理，不在认证回归中发 HEAD（Starlette 对 HEAD 的
+        # 文件流在 ASGITransport 下会等待空 body；浏览器实际 GET 不受影响）。
         r = await remote.get("/api/settings")
         check("隧道不能读接入令牌", r.status_code == 200 and not r.json().get("lan_token"))
         r = await remote.put("/api/settings", json={"lan_enabled": False})

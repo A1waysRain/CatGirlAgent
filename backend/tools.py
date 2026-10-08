@@ -2529,7 +2529,7 @@ def _pick_contact_row(texts: list, name: str, search_box_bottom: int) -> dict | 
     「包含」字面量，必须整块按分区结构排除）；②文字含「包含」；
     ③「聊天记录」头以下；④网络结果区里"文字以关键词开头"的行。
     剩下的行**取最靠上的**（联系人就是下拉最上面第一个匹配）——旧实现按
-    x0 靠右挑，联系人行被 OCR 漏检时会挑到下方「张永富」标签行，点错。
+    x0 靠右挑，联系人行被 OCR 漏检时会挑到下方「王小明」标签行，点错。
     """
     low = name.lower()
     below = [
@@ -2597,7 +2597,7 @@ def _pick_contact_row(texts: list, name: str, search_box_bottom: int) -> dict | 
         return None
 
     # 优先精确匹配，然后取**最靠上**的——联系人就是下拉最上面第一个匹配。
-    # （不按 x0 挑：联系人行被漏检时剩下的「张永富」标签行 x0 也可能靠右，会挑错）
+    # （不按 x0 挑：联系人行被漏检时剩下的「王小明」标签行 x0 也可能靠右，会挑错）
     def _key(t):
         return (1 if t["text"].strip().lower() == low else 0, -t["box"][1])
 

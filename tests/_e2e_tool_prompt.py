@@ -86,8 +86,8 @@ def has(names, *args):
 async def main():
     cases = [
         # (标题, 用户话, 断言函数(checks 闭包读全局 _calls/reply))
-        ("微信发文字", "帮我在微信给张永富发一句 今晚一起吃饭", wechat_text),
-        ("微信发文件", "把桌面上的 报告.docx 发给张永富", wechat_file),
+        ("微信发文字", "帮我在微信给王小明发一句 今晚一起吃饭", wechat_text),
+        ("微信发文件", "把桌面上的 报告.docx 发给王小明", wechat_file),
         ("定时提醒", "明天早上8点提醒我喝水", set_alarm),
         ("问时间", "现在几点了喵？", get_time),
         ("联网搜索", "帮我搜一下今天的热点新闻", web_search),
@@ -128,7 +128,7 @@ def wechat_text():
     if sc:
         a = sc[-1]
         check("window=微信", a.get("window") == "微信", f"window={a.get('window')}")
-        check("name=张永富", a.get("name") == "张永富", f"name={a.get('name')}")
+        check("name=王小明", a.get("name") == "王小明", f"name={a.get('name')}")
     check("调用了 ui_type", "ui_type" in names)
     check("没误调 launch_app", "launch_app" not in names, f"实际: {names}")
     sends = has("ui_send")
@@ -143,7 +143,7 @@ def wechat_file():
     if sf:
         a = sf[-1]
         check("window=微信", a.get("window") == "微信", f"window={a.get('window')}")
-        check("contact=张永富", a.get("contact") == "张永富", f"contact={a.get('contact')}")
+        check("contact=王小明", a.get("contact") == "王小明", f"contact={a.get('contact')}")
         check("path 含 报告", "报告" in a.get("path", ""), f"path={a.get('path')}")
     check("没误调 launch_app", "launch_app" not in names)
     check("没拆成 search+type+send", not ("ui_search_contact" in names and "ui_send" in names),

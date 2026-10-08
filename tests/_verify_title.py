@@ -59,7 +59,7 @@ T.distill_title = FAKE
 
 # ================= 1. _clean_title：把模型返回洗成标题 =================
 print("\n[1] _clean_title 清洗")
-check("去「」包裹", agents._clean_title("「微信给张永富发消息」"), "微信给张永富发消息")
+check("去「」包裹", agents._clean_title("「微信给王小明发消息」"), "微信给王小明发消息")
 check("去《》包裹", agents._clean_title("《周报整理》"), "周报整理")
 check("去引号+尾句号（引号在标点里面）", agents._clean_title("“测试标题”。"), "测试标题")
 check("去【】包裹", agents._clean_title("【测试标题】"), "测试标题")
@@ -106,10 +106,10 @@ def _client_returning(content):
 
 
 try:
-    agents.httpx.AsyncClient = _client_returning("微信给张永富发消息")
-    got = asyncio.run(agents.distill_title("帮我在微信和张永富发一句开会", "好嘞喵"))
+    agents.httpx.AsyncClient = _client_returning("微信给王小明发消息")
+    got = asyncio.run(agents.distill_title("帮我在微信和王小明发一句开会", "好嘞喵"))
     payload = _seen["payload"]
-    check("正常返回标题", got, "微信给张永富发消息")
+    check("正常返回标题", got, "微信给王小明发消息")
     check("stream 关闭", payload["stream"], False)
     check("temperature 0.3", payload["temperature"], 0.3)
     # ★防回归：思考 token 计入 completion 配额，给少了 content 恒空（见 distill_web docstring）
@@ -162,20 +162,20 @@ check("清空会话后回到 True（下一轮可重新起名）", S.claim_title(
 # ================= 4. _run_title 正常落笔 =================
 print("\n[4] _run_title 正常路径")
 sid = S.create_session()["id"]
-S.append_message(sid, "user", "帮我在微信和张永富发一句明天开会")
+S.append_message(sid, "user", "帮我在微信和王小明发一句明天开会")
 S.append_message(sid, "assistant", "好嘞喵")
 before = S._load_session(sid)
 before_updated = before["updated_at"]
-check("首条消息已给占位标题（截 12 字）", before["title"], "帮我在微信和张永富发一句")
+check("首条消息已给占位标题（截 12 字）", before["title"], "帮我在微信和王小明发一句")
 
-FAKE.value = "微信给张永富发消息"
+FAKE.value = "微信给王小明发消息"
 FAKE.calls = 0
 prev = S.claim_title(sid)
-check("认领成功并返回当时的标题当快照", prev, "帮我在微信和张永富发一句")
-T._run_title(sid, "帮我在微信和张永富发一句明天开会", "好嘞喵", prev)
+check("认领成功并返回当时的标题当快照", prev, "帮我在微信和王小明发一句")
+T._run_title(sid, "帮我在微信和王小明发一句明天开会", "好嘞喵", prev)
 
 after = S._load_session(sid)
-check("标题已换成提炼结果", after["title"], "微信给张永富发消息")
+check("标题已换成提炼结果", after["title"], "微信给王小明发消息")
 check("title_auto 落为 False", after["title_auto"], False)
 # 改标题不算"最近活跃"，不该打乱会话列表排序
 check("updated_at 未被 bump", after["updated_at"], before_updated)
