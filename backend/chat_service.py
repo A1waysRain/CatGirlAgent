@@ -153,10 +153,31 @@ def greeting_hint(messages: list) -> str | None:
     )
 
 
+# 「猫娘自我复盘」痕迹：她自己的失误/认错、她记的账、跟她有关的惩罚与赌约、自陈能力不足。
+# 这类行每轮都进上下文，等于每轮提醒她「你上回栽过」——实测让三分之一的回复变成
+# 「上回瞎猜／毛病一模一样／这笔账本喵记着」式的自我检讨。只在**喂模型时**滤掉，
+# 会话文件与设置面板里的原文一字不动（主人要看的是记录，不是给模型看的副本）。
+# 规则按真实小本本调过：拦的是她自己的账，主人的身份/偏好/约定/数字一律保留。
+_SELF_REVIEW_PATTERNS = (
+    (re.compile(r"吹牛|瞎猜|猜错|栽了|栽过|脸肿|翻车|认错|搞错|弄错|记拧|说谎|撒谎|没挂上|没喊到|差点信|差点被骗|加戏|脑补|毛病一模一样"),
+     "自己的失误"),
+    (re.compile(r"这笔账|那笔账|账先记|先记着|记下这笔|记着这笔|笑话.{0,4}的资本|取笑主人"), "记的账"),
+    (re.compile(r"惩罚|挠痒痒|赌约|打赌|愿赌服输|再骗本喵"), "惩罚/赌约"),
+    (re.compile(r"(?:本喵|猫娘)[^。\n]{0,10}(?:老实交代|没法|没本事|做不到|没有这功能)"), "自陈能力不足"),
+)
+
+
+def _keep_summary_line(line: str) -> bool:
+    """这行小本本要不要喂给模型（False = 猫娘的自我复盘痕迹，滤掉）。"""
+    return not any(p.search(line) for p, _ in _SELF_REVIEW_PATTERNS)
+
+
 def build_messages(sid: str, recent: list) -> list[dict]:
     """组装发给模型的消息：system 提示词 + 猫娘记忆小本本(若有) + 当前提醒 + 最近窗口。
 
     摘要段只追加不重写 → system+旧摘要+当前提醒 是稳定前缀，保住 DeepSeek 前缀缓存。
+    小本本注入前按行滤掉自我复盘痕迹（见 _SELF_REVIEW_PATTERNS）；过滤是纯函数，
+    只要小本本没新增段，前缀就仍然稳定，不影响缓存命中。
     """
     msgs = [{"role": "system", "content": SYSTEM_PROMPT_CHAT}]
     if not load_settings().get("allow_auto_web_search", False):
@@ -172,11 +193,18 @@ def build_messages(sid: str, recent: list) -> list[dict]:
         )})
     summary = get_summary(sid)
     if summary:
-        seg_text = "\n".join(f"· {s.get('text','')}" for s in summary)
-        msgs.append({
-            "role": "system",
-            "content": f"[猫娘的记忆小本本]（更早聊过、当前窗口装不下的要点）：\n{seg_text}",
-        })
+        lines = [
+            ln.strip().lstrip("-·•").strip()
+            for s in summary
+            for ln in (s.get("text") or "").splitlines()
+            if ln.strip() and _keep_summary_line(ln)
+        ]
+        if lines:   # 全被滤掉时干脆不注入小本本标签，别塞个空壳进上下文
+            seg_text = "\n".join(f"· {ln}" for ln in lines)
+            msgs.append({
+                "role": "system",
+                "content": f"[猫娘的记忆小本本]（更早聊过、当前窗口装不下的要点）：\n{seg_text}",
+            })
     # 当前已设提醒喂给模型：闹钟存 alarms.json，但模型上下文里从来没见过它——
     # 不喂这段，猫娘会"设过却失忆"：主人再聊到排位赛，她还问几点开跑、想再建一次。
     # 插在 recent 之前，保 system+摘要+提醒 前缀稳定（局部 import，不动顶部 import 面）。

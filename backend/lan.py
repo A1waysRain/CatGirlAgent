@@ -7,6 +7,7 @@ import hmac
 import secrets
 import threading
 import time
+from urllib.parse import urlsplit
 
 COOKIE_NAME = "catgirl_lan"
 SESSION_TTL = 12 * 3600
@@ -19,20 +20,54 @@ _port = 0
 _token = ""
 _sessions: dict[str, float] = {}
 _last_activity = 0.0
+_public_origin = ""
+_login_failures: list[float] = []
+
+
+def normalize_origin(value: str) -> str:
+    """只接受完整 http(s) 入口，禁止路径、凭据及通配地址。"""
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None
+                or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
+                or any(c.isspace() for c in value) or "*" in value):
+            raise ValueError
+        host = parsed.hostname.lower()
+        if ":" in host:
+            host = f"[{host}]"
+        suffix = f":{port}" if port is not None and port != {"http": 80, "https": 443}[parsed.scheme] else ""
+        return f"{parsed.scheme}://{host}{suffix}"
+    except ValueError:
+        raise ValueError("隧道访问地址应为 http://域名:端口 或 https://域名，不含 /m") from None
+
+
+def mobile_origins() -> set[str]:
+    with _lock:
+        if not _enabled:
+            return set()
+        return {f"http://{_ip}:{_port}"} | ({_public_origin} if _public_origin else set())
 
 
 def new_token() -> str:
     return secrets.token_urlsafe(24)
 
 
-def configure(enabled: bool, ip: str = "", port: int = 0, token: str = "") -> None:
+def configure(enabled: bool, ip: str = "", port: int = 0, token: str = "", public_origin: str = "") -> None:
     """更新 LAN 监听身份；配置变化时一律踢掉旧 cookie。"""
-    global _enabled, _ip, _port, _token, _last_activity
+    global _enabled, _ip, _port, _token, _last_activity, _public_origin
+    public_origin = normalize_origin(public_origin)
     with _lock:
-        changed = (_enabled, _ip, _port, _token) != (bool(enabled), ip, int(port or 0), token)
+        changed = (_enabled, _ip, _port, _token, _public_origin) != (bool(enabled), ip, int(port or 0), token, public_origin)
         _enabled, _ip, _port, _token = bool(enabled), ip, int(port or 0), token
+        _public_origin = public_origin
         if changed:
             _sessions.clear()
+            _login_failures.clear()
             _last_activity = time.monotonic() if _enabled else 0.0
 
 
@@ -62,7 +97,12 @@ def is_idle(timeout: float = IDLE_TIMEOUT) -> bool:
 
 def login(token: str) -> str | None:
     with _lock:
-        if not _enabled or not _token or not hmac.compare_digest(token or "", _token):
+        now = time.monotonic()
+        _login_failures[:] = [at for at in _login_failures if now - at < 60]
+        if len(_login_failures) >= 10:
+            return None
+        if not _enabled or not _token or not hmac.compare_digest((token or "").encode(), _token.encode()):
+            _login_failures.append(now)
             return None
         value = secrets.token_urlsafe(32)
         _sessions[value] = time.time() + SESSION_TTL

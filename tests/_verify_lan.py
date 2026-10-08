@@ -90,6 +90,66 @@ async def run() -> None:
     lan._last_activity = time.monotonic() - lan.IDLE_TIMEOUT - 1
     check("手机接入空闲五分钟可被看门狗识别", lan.is_idle())
 
+    # 手机监听必须使用独立认证 app；TCP 隧道不可信任回环 Host 或代理头。
+    public = "http://test-frp.example:23456"
+    lan.configure(True, "192.168.43.2", 8800, "test-token", public)
+    mobile_app = create_app(allowed_origins=lan.mobile_origins(), mobile_only=True)
+    mobile_transport = httpx.ASGITransport(app=mobile_app)
+    async with httpx.AsyncClient(transport=mobile_transport, base_url=public) as remote:
+        r = await remote.get("/m", follow_redirects=False)
+        check("隧道未登录跳转登录页", r.status_code == 302)
+        r = await remote.get("/api/sessions")
+        check("隧道未登录不能读会话", r.status_code == 401)
+        r = await remote.post("/api/lan/login", headers={"Origin": "https://evil.example"}, json={"token": "test-token"})
+        check("跨站登录请求被拒绝", r.status_code == 403 and not r.cookies)
+        r = await remote.post("/api/lan/login", headers={"Origin": public}, json={"token": "test-token"})
+        check("隧道令牌登录成功", r.status_code == 200)
+        remote_cookie = r.cookies.get(lan.COOKIE_NAME)
+        r = await remote.get("/api/sessions")
+        check("隧道登录后会话可用", r.status_code == 200)
+        r = await asyncio.wait_for(remote.head("/js/app_m.js"), timeout=10)
+        check("隧道登录后移动脚本可用", r.status_code == 200)
+        r = await remote.get("/api/settings")
+        check("隧道不能读接入令牌", r.status_code == 200 and not r.json().get("lan_token"))
+        r = await remote.put("/api/settings", json={"lan_enabled": False})
+        check("隧道不能修改电脑设置", r.status_code == 403)
+        r = await remote.post("/api/settings/avatar", json={"role": "cat", "path": "unused.png"})
+        check("隧道不能通过头像接口修改设置", r.status_code == 403)
+        r = await remote.post("/api/sessions", headers={"Origin": "https://evil.example"})
+        check("已登录也不能跨站写入", r.status_code == 403)
+        for spoof in ("127.0.0.1:9999", "localhost:9999", "unlisted.example:23456"):
+            r = await remote.get("/api/sessions", headers={"Host": spoof, "X-Forwarded-Host": public.split("//")[1]})
+            check(f"隧道入口拒绝伪造 Host {spoof}", r.status_code == 403)
+        lan.configure(True, "192.168.43.2", 8800, "test-token", "http://new-frp.example:23456")
+        check("隧道地址变化使旧 cookie 失效", not lan.valid_session(remote_cookie))
+        r = await remote.get("/api/sessions")
+        check("旧隧道地址立即被拒绝", r.status_code == 403)
+
+    secure_origin = "https://secure-frp.example:24443"
+    lan.configure(True, "192.168.43.2", 8800, "test-token", secure_origin)
+    async with httpx.AsyncClient(transport=mobile_transport, base_url=secure_origin) as remote:
+        r = await remote.post("/api/lan/login", json={"token": "test-token"})
+        check("HTTPS 入口发放 Secure cookie", r.status_code == 200 and "Secure" in r.headers.get("set-cookie", ""))
+        r = await remote.get("/api/sessions")
+        check("HTTPS 会话正常使用", r.status_code == 200)
+    async with httpx.AsyncClient(transport=mobile_transport, base_url="http://192.168.43.2:8800") as phone:
+        r = await phone.post("/api/lan/login", json={"token": "test-token"})
+        check("独立手机入口仍支持局域网登录", r.status_code == 200)
+
+    for invalid in ("http://example.com/m", "http://user:secret@example.com", "http://*.example.com", "http://example.com:99999", "ftp://example.com"):
+        try:
+            lan.normalize_origin(invalid)
+            rejected = False
+        except ValueError:
+            rejected = True
+        check("拒绝无效隧道地址 " + invalid, rejected)
+    check("规范化默认 HTTPS 端口", lan.normalize_origin("https://EXAMPLE.com:443/") == "https://example.com")
+    lan.configure(True, "192.168.43.2", 8800, "test-token")
+    check("中文错误令牌不引发服务器异常", lan.login("错误令牌") is None)
+    for _ in range(9):
+        lan.login("wrong")
+    check("十次失败后暂时限制登录尝试", lan.login("test-token") is None)
+
 
 try:
     asyncio.run(run())

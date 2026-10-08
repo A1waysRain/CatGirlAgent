@@ -1842,8 +1842,9 @@
             lanIpInput.value = lanIp;
             document.getElementById("lanPortInput").value = settings.lan_port || 8800;
             document.getElementById("lanTokenInput").value = settings.lan_token || "";
+            document.getElementById("lanPublicOriginInput").value = settings.lan_public_origin || "";
             const addr = settings.lan_enabled && settings.lan_ip ? "手机打开：http://" + settings.lan_ip + ":" + (settings.lan_port || 8800) + "/m（无手机访问 5 分钟后自动关闭）" : "先连接手机热点，再填写电脑获得的 IPv4 地址。";
-            document.getElementById("lanAddressHint").textContent = addr;
+            document.getElementById("lanAddressHint").textContent = settings.lan_enabled && settings.lan_public_origin ? "手机打开：" + settings.lan_public_origin + "/m（无手机访问 5 分钟后自动关闭）" : addr;
         }
         showTimestamp = !!settings.show_timestamp;
         // 设置落位后同步已渲染消息（可能设置晚于历史消息渲染加载，app.js优化建议 #3）
@@ -2129,6 +2130,7 @@
         });
         document.getElementById("lanIpInput").addEventListener("change", e => saveSetting("lan_ip", e.target.value.trim()));
         document.getElementById("lanPortInput").addEventListener("change", e => saveSetting("lan_port", parseInt(e.target.value, 10) || 8800));
+        document.getElementById("lanPublicOriginInput").addEventListener("change", e => saveSetting("lan_public_origin", e.target.value.trim()));
         document.getElementById("lanTokenResetBtn").addEventListener("click", () => saveSetting("lan_token", ""));
     }
 

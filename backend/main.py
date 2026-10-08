@@ -35,7 +35,7 @@ def _split_host(value: str) -> tuple[str, int | None]:
         return "", None
 
 
-def create_app(allowed_origins: set[str] | None = None) -> FastAPI:
+def create_app(allowed_origins: set[str] | None = None, *, mobile_only: bool = False) -> FastAPI:
     """构建猫娘 FastAPI 应用（供 uvicorn / 桌面壳 / 测试复用）。
 
     allowed_origins: 本应用前端自己的 origin 集合。传入后 CORS 只信任这些 origin + 拒绝非回环
@@ -57,15 +57,25 @@ def create_app(allowed_origins: set[str] | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    if allowed_origins:
+    if allowed_origins or mobile_only:
         @app.middleware("http")
         async def _guard_hosts_and_lan(request: Request, call_next):
             host, port = _split_host(request.headers.get("host", ""))
-            if host in _LOOPBACK_HOSTS:
+            request.state.mobile_access = mobile_only
+            if mobile_only:
+                origins = lan.mobile_origins()
+                if (host, port or (443 if request.url.scheme == "https" else 80)) not in {
+                    (name, p or (443 if urlsplit(origin).scheme == "https" else 80))
+                    for origin in origins for name, p in [_split_host(urlsplit(origin).netloc)]
+                }:
+                    return JSONResponse(status_code=403, content={"detail": "手机入口地址不匹配"})
+                origin = request.headers.get("origin")
+                if origin and origin not in origins:
+                    return JSONResponse(status_code=403, content={"detail": "不允许外部网页访问手机接口"})
+            elif host in _LOOPBACK_HOSTS:
                 return await call_next(request)
-            if not lan.is_lan_host(host, port):
+            elif not lan.is_lan_host(host, port):
                 return JSONResponse(status_code=403, content={"detail": "仅允许本机访问"})
-            lan.touch()
             # 登录页和登录接口是 LAN 未认证时唯一放行的资源。
             if request.url.path == "/m/login" or request.url.path == "/api/lan/login":
                 return await call_next(request)
@@ -73,6 +83,7 @@ def create_app(allowed_origins: set[str] | None = None) -> FastAPI:
                 if request.url.path.startswith("/api/"):
                     return JSONResponse(status_code=401, content={"detail": "请先在手机接入页输入令牌"})
                 return RedirectResponse("/m/login", status_code=302)
+            lan.touch()
             return await call_next(request)
 
     # 定时提醒调度器随应用启动（线程幂等，重复 create_app 不会起多线程）
@@ -116,12 +127,16 @@ def create_app(allowed_origins: set[str] | None = None) -> FastAPI:
         return FileResponse(BASE_DIR / "index_m_login.html")
 
     @app.post("/api/lan/login")
-    async def lan_login(payload: dict):
+    async def lan_login(payload: dict, request: Request):
         session = lan.login(str((payload or {}).get("token") or ""))
         if not session:
             return JSONResponse(status_code=403, content={"detail": "令牌不正确"})
+        lan.touch()
         response = JSONResponse({"ok": True})
-        response.set_cookie(lan.COOKIE_NAME, session, httponly=True, samesite="lax", max_age=lan.SESSION_TTL)
+        response.set_cookie(lan.COOKIE_NAME, session, httponly=True, samesite="strict", max_age=lan.SESSION_TTL,
+                            secure=mobile_only and any(
+                                origin.startswith("https://") and urlsplit(origin).netloc == request.headers.get("host")
+                                for origin in lan.mobile_origins()))
         return response
 
     @app.get("/api/lan/ping")
@@ -169,8 +184,9 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, log_level: str = "warn
 
 
 def run_lan_server(app: FastAPI, host: str, port: int, log_level: str = "warning") -> uvicorn.Server:
-    """用与桌面端相同的 FastAPI app 监听指定私网 IP，绝不绑定 0.0.0.0。"""
-    return _start_uvicorn(app, host, port, log_level)
+    """独立手机认证入口，共享业务模块，但绝不继承桌面回环免登录。"""
+    mobile_app = create_app(allowed_origins=lan.mobile_origins(), mobile_only=True)
+    return _start_uvicorn(mobile_app, host, port, log_level)
 
 
 if __name__ == "__main__":

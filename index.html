@@ -208,11 +208,11 @@
       <div class="set-group" id="group-lan">
         <h4>手机接入</h4>
         <div class="set-row">
-          <span class="set-label">允许手机通过热点访问</span>
+          <span class="set-label">允许手机接入</span>
           <label class="switch"><input type="checkbox" id="lanEnabledSwitch"><span class="knob"></span></label>
         </div>
         <div class="set-row">
-          <span class="set-label">电脑热点 IP</span>
+          <span class="set-label">电脑局域网 IP</span>
           <input type="text" id="lanIpInput" class="setting-input" list="lanIpOptions" placeholder="选择或输入，例如 192.168.43.2">
           <datalist id="lanIpOptions"></datalist>
         </div>
@@ -220,6 +220,11 @@
           <span class="set-label">端口</span>
           <input type="number" id="lanPortInput" class="setting-input" min="1" max="65535" value="8800">
         </div>
+        <div class="set-row">
+          <span class="set-label">隧道访问地址</span>
+          <input type="text" id="lanPublicOriginInput" class="setting-input" placeholder="可留空；http://隧道域名:公网端口">
+        </div>
+        <div class="set-row"><span class="set-hint">SakuraFrp 本地目标填上面的 IP 和端口；公网 HTTP 为明文，HTTPS 需另配 TLS 服务。</span></div>
         <div class="set-row">
           <span class="set-label">接入令牌</span>
           <input type="text" id="lanTokenInput" class="setting-input" readonly>

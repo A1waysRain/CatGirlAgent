@@ -45,6 +45,7 @@ DEFAULTS = {
     "lan_ip": "",
     "lan_port": 8800,
     "lan_token": "",
+    "lan_public_origin": "",
     # 主人说「搜/查」时是否弹出浏览器给主人看（关掉则只读内容、不弹窗）
     "search_open_browser": True,
     # 猫娘能否自主联网（默认关，2026-10-04 主人拍板）：关=只有「主人明说搜/查」和

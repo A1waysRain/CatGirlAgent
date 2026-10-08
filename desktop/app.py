@@ -337,18 +337,20 @@ def main() -> None:
             if not _valid_lan_ip(ip):
                 raise ValueError("请选择当前手机热点对应的私网 IPv4 地址")
             token = str(settings.get("lan_token") or "") or lan.new_token()
+            public_origin = lan.normalize_origin(settings.get("lan_public_origin", ""))
             if not settings.get("lan_token"):
                 from backend.settings import save_settings
                 save_settings({"lan_token": token})
             same = lan_holder["server"] and lan_holder["ip"] == ip and lan_holder["port"] == requested_port
-            if same:
-                lan.configure(True, ip, requested_port, token)
+            if same and public_origin == getattr(lan_holder["server"], "catgirl_public_origin", ""):
+                lan.configure(True, ip, requested_port, token, public_origin)
                 return
             stop_lan_server()
-            lan.configure(True, ip, requested_port, token)
+            lan.configure(True, ip, requested_port, token, public_origin)
             lan_holder["server"] = run_lan_server(server.catgirl_app, ip, requested_port,
                                                     log_level="debug" if debug else "warning")
             lan_holder.update(ip=ip, port=requested_port)
+            lan_holder["server"].catgirl_public_origin = public_origin
 
     set_lan_control(apply_lan)
 

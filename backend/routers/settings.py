@@ -30,6 +30,8 @@ def _settings_response(s: dict, reveal_lan_token: bool = True) -> dict:
 
 
 def _is_lan_request(request: Request) -> bool:
+    if getattr(request.state, "mobile_access", False):
+        return True
     host = request.headers.get("host", "")
     name, _, port = host.partition(":")
     try:
@@ -40,6 +42,10 @@ def _is_lan_request(request: Request) -> bool:
 
 def _validate_lan_settings(settings: dict) -> None:
     """即使不经桌面壳，也不允许把危险或无效的 LAN 配置落盘。"""
+    try:
+        settings["lan_public_origin"] = lan.normalize_origin(settings.get("lan_public_origin", ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not settings.get("lan_enabled"):
         return
     try:
@@ -82,8 +88,10 @@ async def update_settings(payload: dict, request: Request):
     for key, value in payload.items():
         if key in candidate:
             candidate[key] = value
-    if any(key in payload for key in ("lan_enabled", "lan_ip", "lan_port", "lan_token")):
+    if any(key in payload for key in ("lan_enabled", "lan_ip", "lan_port", "lan_token", "lan_public_origin")):
         _validate_lan_settings(candidate)
+        if "lan_public_origin" in payload:
+            payload["lan_public_origin"] = candidate["lan_public_origin"]
         apply = _lan_control.get("apply")
         if apply:
             try:
@@ -104,8 +112,10 @@ async def update_settings(payload: dict, request: Request):
 
 
 @router.post("/settings/avatar")
-async def change_avatar(payload: dict):
+async def change_avatar(payload: dict, request: Request):
     """更换聊天头像：把本地图片转成 PNG 存入头像目录。role=user|cat"""
+    if _is_lan_request(request):
+        raise HTTPException(status_code=403, detail="手机端暂不允许修改电脑设置")
     role = payload.get("role", "")
     path = (payload.get("path") or "").strip()
     if role not in ("user", "cat"):
