@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-猫娘来咯：桌面壳 + 网页前端 + FastAPI 后端 三层架构的 DeepSeek 猫娘桌面助手。开发/验证/打包命令都在本目录（`Cat_Girl/`）执行。已 git 管理（2026-09-09，私有 GitHub `A1waysRain/CatGirl`）。
+猫娘来咯：桌面壳 + 网页前端 + FastAPI 后端 三层架构的 DeepSeek 猫娘桌面助手。开发/验证/打包命令都在本目录（`Cat_Girl/`）执行。已 git 管理（2026-09-09 建仓 → **2026-10-08 转公开仓 → 2026-10-10 改名 `A1waysRain/CatGirlAgent`**，原名 `A1waysRain/CatGirl`）。
 
 ## 常用命令
 
