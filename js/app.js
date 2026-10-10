@@ -1845,6 +1845,7 @@
             document.getElementById("lanPublicOriginInput").value = settings.lan_public_origin || "";
             const addr = settings.lan_enabled && settings.lan_ip ? "手机打开：http://" + settings.lan_ip + ":" + (settings.lan_port || 8800) + "/m（无手机访问 5 分钟后自动关闭）" : "先连接手机热点，再填写电脑获得的 IPv4 地址。";
             document.getElementById("lanAddressHint").textContent = settings.lan_enabled && settings.lan_public_origin ? "手机打开：" + settings.lan_public_origin + "/m（无手机访问 5 分钟后自动关闭）" : addr;
+            renderLanIpHint();
         }
         showTimestamp = !!settings.show_timestamp;
         // 设置落位后同步已渲染消息（可能设置晚于历史消息渲染加载，app.js优化建议 #3）
@@ -1867,18 +1868,32 @@
     let settingsSaveQueue = Promise.resolve();
     function saveSetting(key, value) {
         settingsSaveQueue = settingsSaveQueue.then(async function () {
-            const payload = {}; payload[key] = value;
+            // 也支持一次保存多个字段：saveSetting({ lan_ip: ip, lan_enabled: true })
+            const payload = (key && typeof key === "object") ? key : {};
+            if (typeof key !== "object") payload[key] = value;
             try {
                 const r = await fetch("/api/settings", {
                     method: "PUT",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload),
                 });
-                if (r.ok) applySettings(await r.json());
-            } catch (e) { }
+                if (r.ok) { applySettings(await r.json()); return; }
+                // ★后端拒绝时原来一声不吭（只看到开关"弹回去"，不知道原因）。
+                //   2026-10-10 实测：手机接入填了过期 IP 时后端回 400 并明说"当前可用：…"，前端全吞了。
+                let detail = "";
+                try { detail = (await r.json()).detail || ""; } catch (e) { }
+                showToast(detail || ("设置没保存上喵（HTTP " + r.status + "）"));
+                await loadSettings();          // 拉回后端真实状态，别让开关假装开着
+            } catch (e) {
+                showToast("连不上猫娘，设置没保存上喵");
+                await loadSettings();
+            }
         });
         return settingsSaveQueue;
     }
+
+    // 本机当前的私网 IPv4（桌面壳 js_api 探测；供"自动检测 + 替换项"用）
+    let lanIpCandidates = [];
 
     async function refreshLanIps() {
         const input = document.getElementById("lanIpInput");
@@ -1886,16 +1901,45 @@
         if (!input || !options || !window.pywebview || !window.pywebview.api || !window.pywebview.api.list_lan_ips) return;
         try {
             const ips = await window.pywebview.api.list_lan_ips();
+            lanIpCandidates = ips || [];
             const selected = input.value;
             options.innerHTML = "";
-            (ips || []).forEach(function (ip) {
+            lanIpCandidates.forEach(function (ip) {
                 const option = document.createElement("option");
                 option.value = ip;
                 options.appendChild(option);
             });
             if (selected) input.value = selected;
-            else if (!selected && (ips || []).length === 1) input.value = ips[0];
+            else if (!selected && lanIpCandidates.length === 1) input.value = lanIpCandidates[0];
+            renderLanIpHint();
         } catch (e) { }
+    }
+
+    // 自动检测结果：存的地址已不是本机地址时，直接摆出可点的替换项
+    function renderLanIpHint() {
+        const row = document.getElementById("lanIpHintRow");
+        const box = document.getElementById("lanIpHint");
+        if (!row || !box) return;
+        box.textContent = "";
+        if (!lanIpCandidates.length) { row.hidden = true; return; }
+        const cur = (document.getElementById("lanIpInput").value || "").trim();
+        const stale = !!cur && lanIpCandidates.indexOf(cur) === -1;
+        row.hidden = false;
+        box.appendChild(document.createTextNode(
+            stale ? "「" + cur + "」已不是本机当前地址，点一个替换：" : "本机当前私网 IPv4："));
+        lanIpCandidates.forEach(function (ip) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "lan-ip-use";
+            b.textContent = ip;
+            b.onclick = function () {
+                document.getElementById("lanIpInput").value = ip;
+                renderLanIpHint();
+                showToast("已换成 " + ip + " 喵");
+                saveSetting("lan_ip", ip);
+            };
+            box.appendChild(b);
+        });
     }
 
     async function changeAvatar(role) {
@@ -1997,6 +2041,7 @@
         loadAlarms();
         loadRagFiles();
         populateMemorySessionSelect();
+        refreshLanIps();          // 每次打开面板重新探测本机 IP（换网络后旧地址会失效）
     }
     document.querySelectorAll(".func-item").forEach(function (b) {
         b.addEventListener("click", function () {
@@ -2119,16 +2164,35 @@
     if (lanEnabledSwitch) {
         lanEnabledSwitch.addEventListener("change", async function (e) {
             if (!e.target.checked) { saveSetting("lan_enabled", false); return; }
-            const ip = document.getElementById("lanIpInput").value;
+            let ip = (document.getElementById("lanIpInput").value || "").trim();
             if (!ip) {
                 e.target.checked = false;
                 alert("请先连接手机热点，并选择电脑获得的 IPv4 地址。");
                 return;
             }
-            await saveSetting("lan_ip", ip);
-            saveSetting("lan_enabled", true);
+            // ★自动检测（2026-10-10）：存的地址已不是本机地址时——只有一个候选就直接换掉并说明；
+            //   多个候选就让主人挑（面板里已给了替换项）。旧行为是直接发给后端吃 400，主人只看到开关弹回。
+            if (lanIpCandidates.length && lanIpCandidates.indexOf(ip) === -1) {
+                if (lanIpCandidates.length === 1) {
+                    ip = lanIpCandidates[0];
+                    document.getElementById("lanIpInput").value = ip;
+                    showToast("原地址已失效，已自动换成 " + ip + " 喵");
+                } else {
+                    e.target.checked = false;
+                    alert("「" + ip + "」已不是本机地址，请从下拉里选一个：" + lanIpCandidates.join("、"));
+                    renderLanIpHint();
+                    return;
+                }
+            }
+            // ★IP 和开关必须一次保存：分两次存时，第一次存 IP 的 applySettings 会把开关重渲染回关闭，
+            //   看起来就是"点一下往右挪了点又弹回去"（2026-10-10 实测）。
+            saveSetting({ lan_ip: ip, lan_enabled: true });
         });
-        document.getElementById("lanIpInput").addEventListener("change", e => saveSetting("lan_ip", e.target.value.trim()));
+        document.getElementById("lanIpInput").addEventListener("change", e => {
+            e.target.value = e.target.value.trim();
+            renderLanIpHint();
+            saveSetting("lan_ip", e.target.value);
+        });
         document.getElementById("lanPortInput").addEventListener("change", e => saveSetting("lan_port", parseInt(e.target.value, 10) || 8800));
         document.getElementById("lanPublicOriginInput").addEventListener("change", e => saveSetting("lan_public_origin", e.target.value.trim()));
         document.getElementById("lanTokenResetBtn").addEventListener("click", () => saveSetting("lan_token", ""));

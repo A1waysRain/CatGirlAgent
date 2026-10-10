@@ -1719,6 +1719,11 @@ _FACT_STALE_DAYS = 365      # 来源发布时间超过它就提示可能过时
 _FACT_MAX_PER_DOMAIN = 2    # 同域名最多读几篇——verified 要的是独立域名，同域堆再多也没用
 _FACT_MIN_FULL_DOMAINS = 2  # verified 的独立域名门槛（也是抓取循环的收手信号）
 _FACT_TARGET_FULL_DOMAINS = 3   # 读到这么多独立域名就够给 high confidence，可以收手了
+# ★切题度门槛：话题中心词要在正文里至少出现这么多次，才算"这页真的在讲这个问题"。
+# 实测病根（09-26 原案）：查天气抓回旅游攻略/外交部国家概况——实体词出现十几次、
+# 谓语词（天气）只顺带提 1 次，旧码只数"词元出现过没有"→ 照样报 verified+high，
+# 比不核验更危险（模型会拿无关正文当结论硬顶）。
+_FACT_TERM_MIN_OCCUR = 2
 _FACT_ROOT_PATHS = {"/index.html", "/index.htm", "/index.php", "/home", "/en", "/zh", "/cn"}
 # 时效：对外统一语义，内部各自翻译成 Brave / Bing 的写法
 _FACT_FRESHNESS = {
@@ -1791,15 +1796,72 @@ def _fact_terms(query: str) -> list[str]:
     return out
 
 
-def _fact_relevant(query: str, text: str) -> tuple[bool, int, int]:
-    """正文是否真在讲这个问题——命中足够多的查询关键词才算，防首页导航文字冒充证据。"""
+# 问句尾巴：这些词是"在问"而不是"话题"，取话题中心词时要先剥掉
+# （什么时候/怎么样/多少…不算话题词，剥掉之后剩下的最后一个词才是这页该讲的东西）
+_FACT_TAIL_RE = re.compile(
+    r"(?:什么时候|是什么|怎么样|怎么办|在哪里|何时|几点|多少|怎样|如何|是谁|哪些|哪个|什么"
+    r"|吗|呢|吧|呀|啊|的话|了|的|是)+$")
+
+
+def _fact_head_term(query: str) -> str:
+    """取查询的「话题中心词」——最后一个 CJK 段的末二字（先剥掉问句尾巴）。
+
+    中文是**中心词在后**：北京天气→天气、F1赛历→赛历、欧洲杯决赛什么时候→决赛。
+    为什么需要它：判"这一页到底在不在讲这个问题"时，中心词比实体词更能说明问题——
+    北京旅游攻略会反复讲「北京」（十几次），却只顺带提一句「天气」（1 次）。
+    没有 CJK（纯英文查询）或剥完不足 2 字时返回 ""，表示这项判不了、不参与。
+    """
+    runs = re.findall(r"[一-鿿]+", (query or "").strip())
+    if not runs:
+        return ""
+    run = _FACT_TAIL_RE.sub("", runs[-1])
+    return run[-2:] if len(run) >= 2 else ""
+
+
+def _fact_relevance(query: str, text: str) -> dict:
+    """衡量正文"切不切题"，返回覆盖度 + 切题判定。
+
+    - `covered`/`hits`/`total`：**宽松**的覆盖判定（命中足够多查询词元）——只回答
+      "正文里出现了问题的词吗"，防的是首页导航文字冒充证据（决定 full/snippet）。
+    - `specific_hit`：命中查询里的**高区分度词**（年份/型号/英文名，如 2026、F1）。
+      中文网页里这类词近似"稀有词"，命中它基本就能确定在讲同一件事。
+    - `center`/`center_count`/`strong`：**切题判定**。查询带高区分度词时看前者；
+      否则看话题中心词有没有在正文里**反复出现**（≥ _FACT_TERM_MIN_OCCUR）。
+
+    实测病根（09-26 原案）：查「北京天气」抓回北京旅游攻略——实体词北京出现十几次、
+    中心词天气只顺带提 1 次，宽松覆盖判定照样放行（连垃圾词元「京天」都被「北京天安门」喂饱了）。
+
+    ★为什么不能只用"中心词重复次数"：真实赛历页写的是「赛**程**」不是「赛历」，
+    只数中心词会把「2026 F1 赛历」这类正常查询一起误杀（2026-10-10 真联网实测踩到）。
+    高区分度词命中是更可靠的信号，两者取或。
+    """
+    low = (text or "").lower()
     terms = _fact_terms(query)
-    if not terms:
-        return True, 0, 0
-    low = text.lower()
     hits = sum(1 for term in terms if term in low)
-    need = max(1, min(3, -(-len(terms) * 2 // 5)))   # ceil(0.4×词元数)，封顶 3
-    return hits >= need, hits, len(terms)
+    need = max(1, min(3, -(-len(terms) * 2 // 5))) if terms else 0   # ceil(0.4×词元数)，封顶 3
+    specific = [t for t in terms if t.isascii()]
+    specific_hit = any(t in low for t in specific)
+    center = _fact_head_term(query)
+    center_count = low.count(center) if center else 0
+    covered = hits >= need if terms else True
+    # 切题 = 覆盖过关 且（命中高区分度词 or 没中心词可判 or 中心词反复出现）
+    topic_ok = specific_hit or not center or center_count >= _FACT_TERM_MIN_OCCUR
+    return {
+        "hits": hits, "total": len(terms), "covered": covered,
+        "center": center, "center_count": center_count,
+        "specific": specific, "specific_hit": specific_hit,
+        "strong": bool(covered and topic_ok),
+    }
+
+
+def _fact_relevant(query: str, text: str) -> tuple[bool, int, int]:
+    """正文是否命中了查询关键词（宽松覆盖判定，决定 full/snippet，保住召回）。
+
+    更严的"到底在不在讲这件事"看 `_fact_relevance()["strong"]`——它不决定证据分级
+    （那样会把用同义词写中心词的正常网页一起误杀），只影响核验状态与置信度。
+    """
+    rel = _fact_relevance(query, text)
+    return rel["covered"], rel["hits"], rel["total"]
 
 
 def _fact_is_root_page(url: str) -> bool:
@@ -1996,7 +2058,7 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
         return json.dumps({"status": "failed", "answer": "缺少待核验问题", "sources": []}, ensure_ascii=False)
     max_sources = max(2, min(int(max_sources or 5), 8))
     fresh_key, _, _ = _fact_freshness(freshness)
-    wanted = {str(d).lower().strip().lstrip("www.") for d in (domains or []) if str(d).strip()}
+    wanted = {str(d).lower().strip().removeprefix("www.") for d in (domains or []) if str(d).strip()}
     cache_key = _fact_cache_key(query, fresh_key, domains, max_sources)
     if not force_refresh:
         cached = _fact_cache_read(cache_key)
@@ -2036,7 +2098,7 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
         if canonical_url in seen_urls:
             continue
         seen_urls.add(canonical_url)
-        host = (urllib.parse.urlparse(url).hostname or "").lower().lstrip("www.")
+        host = (urllib.parse.urlparse(url).hostname or "").lower().removeprefix("www.")
         if wanted and not any(host == d or host.endswith("." + d) for d in wanted):
             continue
         # 同一域名读够了就跳过，把抓取预算留给独立来源
@@ -2047,12 +2109,19 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
         text, error = _fact_fetch(url, lang)
         grade, reasons = _grade_source(item, text, error, search_q)
         published = item.get("published", "")
+        # ★切题度：读到正文 ≠ 这页在讲这件事。只对真读到正文的来源算（读失败没正文可算）。
+        relevance = _fact_relevance(search_q, text) if text.strip() else None
         sources.append({
             "title": item.get("title", ""), "url": url, "domain": host,
             "published": published, "age_days": _fact_age_days(published),
             "snippet": item.get("snippet", "")[:1200],
             "extract": text[:_FACT_REPORT_EXTRACT_CHARS], "grade": grade, "grade_reasons": reasons,
             "read_error": error,
+            "topic_match": ("strong" if relevance["strong"] else "weak") if relevance else "unknown",
+            "relevance": None if relevance is None else {
+                "hits": relevance["hits"], "total": relevance["total"],
+                "center": relevance["center"], "center_count": relevance["center_count"],
+            },
         })
         if grade == "full" and host:
             full_domains_now.add(host)
@@ -2062,6 +2131,11 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
             break
     full = [s for s in sources if s["grade"] == "full"]
     full_domains = {s["domain"] for s in full if s["domain"]}
+    # ★只把"真的在讲这个问题"的正文算作可用证据（话题中心词在正文里反复出现过）。
+    #   旧码只看"读到几个独立域名"，实测能拿 3 个独立域名的旅游攻略/国家概况报 verified+high。
+    topical = [s for s in full if s.get("topic_match") == "strong"]
+    topical_domains = {s["domain"] for s in topical if s["domain"]}
+    weak = [s for s in full if s.get("topic_match") == "weak"]
     downgraded = [s for s in sources if s["grade"] == "snippet"]
     stale = [s for s in full if (s.get("age_days") or 0) > _FACT_STALE_DAYS]
     caveats = [
@@ -2080,14 +2154,29 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
     elif not full_domains:
         status, confidence = "insufficient", "low"
         answer = "只拿到搜索摘要、站点首页或无关正文，没有可用的网页正文证据，不能确认结论。"
-    elif len(full_domains) < 2:
+    elif not topical_domains:
+        # 读到了正文，但没有一条真在讲这个问题（话题词只是顺带出现）→ 一律不算证据
+        status, confidence = "insufficient", "low"
+        answer = "读到的正文都与问题对不上（问题的话题词只是顺带提到），没有可用证据，不能确认结论。"
+        caveats.append("读到 {} 条正文，但没有一条真正在讲「{}」，不计入证据".format(
+            len(full), (weak[0].get("relevance") or {}).get("center") or query))
+    elif len(topical_domains) < 2:
         status, confidence = "insufficient", "medium"
-        answer = "只读到 1 个来源的正文证据，独立来源不足，不能确认结论。"
+        answer = "只读到 1 个真正对得上问题的来源正文，独立来源不足，不能确认结论。"
     else:
         status = "verified"
-        confidence = "high" if len(full_domains) >= 3 and not stale else "medium"
-        answer = (f"读到 {len(full_domains)} 个独立来源的网页正文，请结合摘录与发布时间判断；"
-                  "这是可核验的当前证据，但不是绝对结论。")
+        confidence = "high" if len(topical_domains) >= 3 and not stale else "medium"
+        if weak:
+            # 有对得上的证据，也混着答非所问的 → 如实标出来，别让模型把它们当结论
+            detail = "、".join("{}(话题词「{}」只出现 {} 次)".format(
+                s["domain"], (s.get("relevance") or {}).get("center") or "?",
+                (s.get("relevance") or {}).get("center_count", 0)) for s in weak)
+            caveats.append("有 {} 条正文与问题对不上、可能答非所问，不计入证据：{}".format(len(weak), detail))
+            answer = (f"读到 {len(topical_domains)} 个真正对得上问题的来源正文，请结合摘录与发布时间判断；"
+                      f"另有 {len(weak)} 条与问题对不上（已排除），这不是绝对结论。")
+        else:
+            answer = (f"读到 {len(topical_domains)} 个独立来源的网页正文，请结合摘录与发布时间判断；"
+                      "这是可核验的当前证据，但不是绝对结论。")
     result = {
         "status": status, "answer": answer, "confidence": confidence,
         "freshness": fresh_key, "market": mkt,
@@ -2097,6 +2186,8 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
             "full": len(full), "snippet": len(downgraded),
             "none": len(sources) - len(full) - len(downgraded),
             "independent_domains": len(full_domains),
+            # ★把"读到的正文"和"真在讲这件事的正文"分开报——两者不是一回事
+            "topic_strong": len(topical), "topic_weak": len(weak),
         },
         "sources": sources, "caveats": caveats,
     }
@@ -2139,7 +2230,7 @@ def _fact_cache_ttl(freshness: str, query: str) -> int:
 
 
 def _fact_cache_key(query: str, freshness: str, domains: list[str] | None, max_sources: int) -> str:
-    domain_key = tuple(sorted(str(d).strip().lower().lstrip("www.") for d in (domains or []) if str(d).strip()))
+    domain_key = tuple(sorted(str(d).strip().lower().removeprefix("www.") for d in (domains or []) if str(d).strip()))
     payload = {"query": _normalize_query(query), "freshness": freshness,
                "domains": domain_key, "max_sources": int(max_sources),
                "provider": getattr(settings, "web_search_provider", "brave"),
@@ -2260,8 +2351,12 @@ def fact_brief(query: str, max_sources: int = 4, limit: int = _FACT_BRIEF_LIMIT,
             if not text:
                 continue
             age = source.get("age_days")
+            tag = "full" if grade == "full" else "snippet,未读到正文"
+            if grade == "full" and source.get("topic_match") == "weak":
+                # ★读到正文 ≠ 在讲这件事：标出来，免得模型拿答非所问的正文当结论
+                tag += ",与问题对不上"
             prefix = "[{g}] {d}（{p}{a}）：".format(
-                g="full" if grade == "full" else "snippet,未读到正文",
+                g=tag,
                 d=source.get("domain") or "未知来源",
                 p=source.get("published") or "无发布时间",
                 a=f"，约{age}天前" if isinstance(age, int) else "")

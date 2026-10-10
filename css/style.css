@@ -624,6 +624,11 @@ body::after {
 .set-label { flex:1; font-size:13px; font-weight:500; color:var(--ink); }
 .set-hint { font-size:11px; color:var(--ink-faint); }
 
+/* 手机接入"自动检测"里可点的 IP 替换项 */
+.lan-ip-use { margin:0 6px 0 0; padding:1px 8px; border:1px solid var(--border, #f0b8d2); border-radius:10px;
+  background:#fff; color:var(--accent-deep, #b11f62); font:inherit; font-size:11px; line-height:1.6; cursor:pointer; }
+.lan-ip-use:hover { background:var(--primary-light, #fdf2f8); }
+
 .avatar-preview { width:38px; height:38px; }
 
 .setting-input {

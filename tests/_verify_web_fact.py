@@ -10,6 +10,7 @@
 import json
 import os
 import shutil
+import socket
 import sys
 import tempfile
 import urllib.error
@@ -128,6 +129,20 @@ GOOD_HTML = ("<html><body><nav>首页 车队 赛程 商店 登录</nav>"
              "<article><p>{}</p></article><footer>© 2026 版权所有</footer></body></html>")
 JUNK_BODY = "今天阳光很好，公园里的花开得漂亮，适合出门散步。"
 
+# ★切题度夹具（2026-09-26 原案形状）：实体词反复出现、**话题中心词只顺带提 1 次**。
+# 这正是"读了无关正文"能骗过旧判级的原因——实体词（北京）出现几十次，
+# 谓语/中心词（天气）只出现 1 次，旧码只数"词元出现过没有"照样判 full。
+WEAK_TOPIC_BODY = ("北京旅游攻略：北京故宫、北京天安门、北京长城、北京颐和园都是必去景点。"
+                   "北京春季与秋季气候宜人，适合出行，北京的地铁线路发达。") * 12 + "出发前可以看看天气。"
+STRONG_TOPIC_BODY = ("北京天气：北京今天天气多云转晴，北京明天天气有小雨，气温 18 度。"
+                     "北京本周天气以晴为主，周末北京天气转阴，风力 3 级。") * 12
+
+# ★真实赛历页写的是「赛**程**」不是「赛历」——只数中心词重复次数会把这类正常网页误杀
+# （2026-10-10 真联网实测：加严后「2026 F1 赛历」被从 verified/high 压成 insufficient/medium）。
+# 所以查询带高区分度词（2026/F1）时，命中它就足以判"在讲同一件事"。
+SYNONYM_BODY = ("2026 F1 赛程公布：3月澳大利亚站揭幕，随后是上海站、铃鹿站，全年 24 站，"
+                "12 月阿布扎比收官，各站排位赛与正赛时间见下表。") * 12
+
 
 def page(host, path="/article/2026", body=None):
     """返回 (url, html)，正文默认够长且与问题相关。"""
@@ -169,6 +184,31 @@ try:
           tools._grade_source({"url": url_a}, JUNK_BODY * 30, None, "2026 F1 赛历")[0] == "snippet")
     check("无关正文的原因含'相关性'", "相关性" in " ".join(
         tools._grade_source({"url": url_a}, JUNK_BODY * 30, None, "2026 F1 赛历")[1]))
+
+    # ★切题度（2026-10-10 新增）：判级放行 ≠ 这页在讲这件事。
+    #   旧码只数"词元出现过没有"，于是"顺带提一句"的无关正文也被当证据 → verified/high 说谎。
+    check("话题中心词：北京天气 → 天气", tools._fact_head_term("北京天气") == "天气")
+    check("话题中心词：F1 2026 赛历 → 赛历", tools._fact_head_term("F1 2026 赛历") == "赛历")
+    check("话题中心词：剥掉问句尾巴（欧洲杯决赛什么时候 → 决赛）",
+          tools._fact_head_term("欧洲杯决赛什么时候") == "决赛")
+    check("话题中心词：剥掉问句尾巴（明天北京天气怎么样 → 天气）",
+          tools._fact_head_term("明天北京天气怎么样") == "天气")
+    check("话题中心词：纯英文查询判不了 → 空", tools._fact_head_term("F1 2026") == "")
+    check("话题中心词：全是疑问词 → 空", tools._fact_head_term("什么时候") == "")
+    weak_rel = tools._fact_relevance("北京天气", WEAK_TOPIC_BODY)
+    check("顺带提一句：覆盖判定仍放行（不改证据分级，保住召回）", weak_rel["covered"] is True)
+    check("★顺带提一句：切题判定为弱", weak_rel["strong"] is False)
+    check("★顺带提一句：中心词只出现 1 次", weak_rel["center_count"] == 1)
+    strong_rel = tools._fact_relevance("北京天气", STRONG_TOPIC_BODY)
+    check("真在讲这件事：切题判定为强", strong_rel["strong"] is True)
+    check("真在讲这件事：中心词反复出现", strong_rel["center_count"] >= tools._FACT_TERM_MIN_OCCUR)
+    check("回归：F1 赛历 GOOD_BODY 仍算切题",
+          tools._fact_relevance("2026 F1 赛历", GOOD_BODY * 6)["strong"] is True)
+    # ★同义词守卫：赛历页写「赛程」，中心词一次都没出现——不能因此误杀
+    syn_rel = tools._fact_relevance("2026 F1 赛历", SYNONYM_BODY)
+    check("★中心词被同义词顶掉也不误杀（查询带 2026/F1 高区分度词）", syn_rel["strong"] is True)
+    check("★对照：该正文里中心词确实一次没出现（上面的判定不是靠它）", syn_rel["center_count"] == 0)
+    check("★对照：确实是靠高区分度词过的关", syn_rel["specific_hit"] is True)
     check("读失败但有摘要 → snippet",
           tools._grade_source({"url": url_a, "snippet": "2026 赛季赛历与完整日程安排，含各站排位赛与正赛时间"},
                               "", "读取失败：timeout", "q")[0] == "snippet")
@@ -205,6 +245,85 @@ try:
                   rss=[rss_item(url_a), rss_item(url_b), rss_item(url_c)],
                   _args={"query": "2026 F1 赛历"})
     check("3 个独立域名且不过期 → confidence=high", report["confidence"] == "high")
+
+    # ★2026-10-10 切题度端到端。09-26 原案：查天气拿到 3 个独立域名的正文，
+    #   但全是旅游攻略/国家概况（实体词反复出现、中心词只顺带提 1 次）→ 旧码报 verified+high。
+    weak_pages, weak_rss = {}, []
+    for i, h in enumerate((HOST_A, HOST_B, HOST_C)):
+        u, html = page(h, f"/guide/{i}", WEAK_TOPIC_BODY)
+        weak_pages[u] = html
+        weak_rss.append(rss_item(u))
+    report = call(pages=weak_pages, rss=weak_rss, _args={"query": "北京天气"})
+    check("★无关正文：不再报 verified", report["status"] != "verified")
+    check("★无关正文：判为 insufficient", report["status"] == "insufficient")
+    check("★无关正文：置信度压到 low", report["confidence"] == "low")
+    check("★无关正文：正文仍被读到（3 条 full，不谎报'没读到'）", report["evidence"]["full"] == 3)
+    check("★无关正文：切题计数 topic_strong=0 / topic_weak=3",
+          report["evidence"]["topic_strong"] == 0 and report["evidence"]["topic_weak"] == 3)
+    check("★无关正文：caveat 说明没有一条在讲这个问题",
+          any("没有一条真正在讲" in c for c in report["caveats"]))
+    check("★无关正文：每条来源带 topic_match=weak",
+          all(s["topic_match"] == "weak" for s in report["sources"] if s["grade"] == "full"))
+    check("★无关正文：fact_brief 仍把正文给模型，但标出'与问题对不上'",
+          "与问题对不上" in tools.fact_brief("北京天气", report=report))
+
+    # 对照：同一查询、真在讲天气的正文 → 照旧 verified + high（别把召回一起修没了）
+    strong_pages, strong_rss = {}, []
+    for i, h in enumerate((HOST_A, HOST_B, HOST_C)):
+        u, html = page(h, f"/weather/{i}", STRONG_TOPIC_BODY)
+        strong_pages[u] = html
+        strong_rss.append(rss_item(u))
+    report = call(pages=strong_pages, rss=strong_rss, _args={"query": "北京天气"})
+    check("对照：切题正文照旧 verified", report["status"] == "verified")
+    check("对照：切题正文照旧 confidence=high", report["confidence"] == "high")
+    check("对照：不出现'答非所问' caveat", not any("对不上" in c for c in report["caveats"]))
+
+    # 混合：2 条切题 + 1 条答非所问 → 仍 verified，但置信度不封顶、并如实标出那条
+    mix_pages, mix_rss = {}, []
+    for i, h in enumerate((HOST_A, HOST_B)):
+        u, html = page(h, f"/weather/mix{i}", STRONG_TOPIC_BODY)
+        mix_pages[u] = html
+        mix_rss.append(rss_item(u))
+    u3, html3 = page(HOST_C, "/guide/mix3", WEAK_TOPIC_BODY)
+    mix_pages[u3] = html3
+    mix_rss.append(rss_item(u3))
+    report = call(pages=mix_pages, rss=mix_rss, _args={"query": "北京天气"})
+    check("混合：仍 verified（有 2 个切题来源）", report["status"] == "verified")
+    check("混合：置信度不是 high（混着答非所问）", report["confidence"] == "medium")
+    check("混合：caveat 点出那 1 条答非所问", any("与问题对不上" in c for c in report["caveats"]))
+
+    # ★反向验证（证明上面几组断言不是空转）：把切题判定强制成"永远算切题"
+    #   （= 2026-10-10 修复前的行为），同一批无关正文夹具必须回到 verified + high。
+    _real_relevance = tools._fact_relevance
+    tools._fact_relevance = lambda q, t: {"hits": 9, "total": 9, "covered": True,
+                                          "center": "天气", "center_count": 99, "strong": True}
+    try:
+        report = call(pages=weak_pages, rss=weak_rss, _args={"query": "北京天气"})
+    finally:
+        tools._fact_relevance = _real_relevance
+    check("★反向验证：关掉切题判定就回到 verified（断言非空转）", report["status"] == "verified")
+    check("★反向验证：关掉后置信度又是 high", report["confidence"] == "high")
+
+    # ★域名归一化（2026-10-10 修）：`str.lstrip("www.")` 的参数是**字符集**不是前缀，
+    #   会把 weather.com.cn 啃成 eather.com.cn、wwf.org 啃成 f.org。
+    #   靶子特意用"去掉 www. 后仍以 w 开头"的主机名，才能把两者区分开。
+    #   （getaddrinfo 是 I/O 边界，跟 urlopen 一样打桩；用 IP 字面量就完全不碰 DNS。）
+    _real_getaddrinfo = socket.getaddrinfo
+    socket.getaddrinfo = lambda *a, **kw: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+    try:
+        url_w, html_w = page("www.weather-example.com", "/news/w", GOOD_BODY * 6)
+        report = call(pages={url_w: html_w}, rss=[rss_item(url_w)], _args={"query": "2026 F1 赛历"})
+        hosts = [s["domain"] for s in report["sources"]]
+        check("★域名不被 lstrip 啃掉首字母（weather-example 不是 eather-example）",
+              hosts == ["weather-example.com"])
+        check("★www. 前缀照样归一化掉", all(not h.startswith("www.") for h in hosts))
+        report = call(pages={url_w: html_w}, rss=[rss_item(url_w)],
+                      _args={"query": "2026 F1 赛历", "domains": ["weather-example.com"]})
+        check("★domains 过滤后仍取得到该来源（两边归一化一致）",
+              [s["domain"] for s in report["sources"]] == ["weather-example.com"])
+    finally:
+        socket.getaddrinfo = _real_getaddrinfo
 
     report = call(pages={url_a: html_a}, rss=[rss_item(url_a)], _args={"query": "2026 F1 赛历"})
     check("只有 1 个域名 → insufficient", report["status"] == "insufficient")
