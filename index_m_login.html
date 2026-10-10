@@ -26,8 +26,17 @@
   <script>
     document.getElementById("loginForm").addEventListener("submit", async function (event) {
       event.preventDefault(); const error = document.getElementById("error"); error.textContent = "";
-      const response = await fetch("/api/lan/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: document.getElementById("token").value }) });
-      if (response.ok) location.replace("/m"); else error.textContent = "令牌不正确，请回电脑确认。";
+      const button = event.currentTarget.querySelector("button"); button.disabled = true;
+      try {
+        const response = await fetch("/api/lan/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: document.getElementById("token").value }) });
+        if (response.ok) { location.replace("/m"); return; }
+        const data = await response.json().catch(() => null);
+        if (response.status === 429) error.textContent = "尝试太频繁，请等一分钟再试。";
+        else if (response.status === 403 && data && /入口地址不匹配|不允许外部网页/.test(data.detail || "")) error.textContent = "访问地址不匹配，请核对电脑的隧道访问地址与手机地址，注意 http/https 协议和端口。";
+        else if (response.status === 403 && data && data.detail === "令牌不正确") error.textContent = "令牌不正确，请回电脑核对，末尾不要多空格。";
+        else error.textContent = "连接异常，请检查猫娘和隧道是否开启。";
+      } catch (e) { error.textContent = "连不上猫娘，请检查网络和隧道。"; }
+      finally { button.disabled = false; }
     });
   </script>
 </body>

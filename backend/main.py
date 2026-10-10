@@ -128,7 +128,11 @@ def create_app(allowed_origins: set[str] | None = None, *, mobile_only: bool = F
 
     @app.post("/api/lan/login")
     async def lan_login(payload: dict, request: Request):
-        session = lan.login(str((payload or {}).get("token") or ""))
+        try:
+            session = lan.login(str((payload or {}).get("token") or ""))
+        except lan.LoginRateLimited:
+            return JSONResponse(status_code=429, headers={"Retry-After": "60"},
+                                content={"detail": "尝试太频繁，请等一分钟再试"})
         if not session:
             return JSONResponse(status_code=403, content={"detail": "令牌不正确"})
         lan.touch()

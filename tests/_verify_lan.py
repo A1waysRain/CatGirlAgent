@@ -111,6 +111,16 @@ async def run() -> None:
         # 文件流在 ASGITransport 下会等待空 body；浏览器实际 GET 不受影响）。
         r = await remote.get("/api/settings")
         check("隧道不能读接入令牌", r.status_code == 200 and not r.json().get("lan_token"))
+        r = await remote.post("/api/upload_mobile?filename=notes.txt&kind=file", content=b"mobile file")
+        check("手机可上传文件内容", r.status_code == 200 and r.json().get("name") == "notes.txt")
+        uploaded_file = r.json().get("path", "")
+        r = await remote.post("/api/upload_mobile?filename=photo.png&kind=image", content=b"not an image")
+        check("手机拒绝损坏图片", r.status_code == 400)
+        r = await remote.post("/api/upload_mobile?filename=.env&kind=file", content=b"SECRET=x")
+        check("手机拒绝敏感配置文件", r.status_code == 400)
+        if uploaded_file:
+            import pathlib
+            pathlib.Path(uploaded_file).unlink(missing_ok=True)
         r = await remote.put("/api/settings", json={"lan_enabled": False})
         check("隧道不能修改电脑设置", r.status_code == 403)
         r = await remote.post("/api/settings/avatar", json={"role": "cat", "path": "unused.png"})
@@ -148,7 +158,12 @@ async def run() -> None:
     check("中文错误令牌不引发服务器异常", lan.login("错误令牌") is None)
     for _ in range(9):
         lan.login("wrong")
-    check("十次失败后暂时限制登录尝试", lan.login("test-token") is None)
+    try:
+        lan.login("test-token")
+        rate_limited = False
+    except lan.LoginRateLimited:
+        rate_limited = True
+    check("十次失败后暂时限制登录尝试", rate_limited)
 
 
 try:

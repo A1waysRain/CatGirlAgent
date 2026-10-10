@@ -3,6 +3,7 @@
   const chat = document.getElementById("chat"), input = document.getElementById("input"), send = document.getElementById("send");
   const panel = document.getElementById("sessionsPanel"), list = document.getElementById("sessionsList"), title = document.getElementById("title");
   const webToggle = document.getElementById("webSearchToggle");
+  const imageInput = document.getElementById("mobileImageInput"), fileInput = document.getElementById("mobileFileInput");
   let current = null, sending = false, avatars = { user: "/img/user.jpg", cat: "/img/cat.png" };
 
   function esc(text) { const d = document.createElement("div"); d.textContent = text || ""; return d.innerHTML; }
@@ -12,10 +13,27 @@
   async function loadSessions() { const data = await request("/api/sessions"); list.innerHTML = ""; (data.sessions || []).forEach(s => { const b = document.createElement("button"); b.className = "mobile-session" + (s.id === current ? " active" : ""); b.innerHTML = esc(s.title || "新会话") + "<small>" + (s.count || 0) + " 条消息</small>"; b.onclick = () => select(s.id); list.appendChild(b); }); return data.current; }
   async function select(id) { const data = await request("/api/sessions/" + encodeURIComponent(id)); current = data.session.id; title.textContent = data.session.title || "新会话"; render(data.session.messages || []); panel.hidden = true; await loadSessions(); }
   async function fetchSSE(url, body, onEvent) { const response = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) }); if (response.status === 401) { location.replace("/m/login"); return; } if (!response.ok) throw new Error("发送失败"); const reader = response.body.getReader(), decoder = new TextDecoder(), state = { text:"" }; while (true) { const part = await reader.read(); if (part.done) break; state.text += decoder.decode(part.value, {stream:true}); let cut; while ((cut = state.text.indexOf("\n\n")) >= 0) { const raw = state.text.slice(0,cut); state.text = state.text.slice(cut+2); if (!raw.startsWith("data: ")) continue; onEvent(JSON.parse(raw.slice(6))); } } }
+  async function uploadSelected(file, kind) {
+    if (!file || sending || !current) return;
+    const bubble = add("user", "正在上传：" + file.name);
+    try {
+      const response = await fetch("/api/upload_mobile?filename=" + encodeURIComponent(file.name) + "&kind=" + kind, { method:"POST", headers:{"Content-Type": file.type || "application/octet-stream"}, body:file });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "上传失败");
+      bubble.textContent = kind === "image" ? "已上传图片：" + file.name : "已上传文件：" + file.name;
+      const prompt = kind === "image" ? "我上传了一张图，图片路径是：" + data.path + "。帮我看看里面有什么喵" : "我上传了一个文件，路径是：" + data.path + "。帮我看看里面是什么喵";
+      input.value = prompt;
+      await submit(new Event("submit"));
+    } catch (e) { bubble.textContent = "上传失败：" + (e.message || "请稍后再试"); }
+  }
   async function submit(event) { event.preventDefault(); const text = input.value.trim(); if (!text || sending || !current) return; sending=true; send.disabled=true; input.value=""; if (chat.querySelector(".mobile-empty")) chat.innerHTML=""; add("user", text); const bubble=add("assistant", ""); try { await fetchSSE("/api/chat_response", {chatmassage:text, session_id:current}, evt => { if (evt.type === "delta") { bubble.textContent += evt.text; chat.scrollTop=chat.scrollHeight; } if (evt.type === "error") bubble.textContent = evt.detail || "本喵这次没接住消息，稍后再试喵。"; if (evt.type === "meta" && evt.session) title.textContent=evt.session.title || title.textContent; }); await loadSessions(); } catch (e) { bubble.textContent = "本喵这次没接住消息，稍后再试喵。"; } finally { sending=false; send.disabled=false; input.focus(); } }
   document.getElementById("sessionsButton").onclick = () => { panel.hidden = !panel.hidden; };
   document.getElementById("newButton").onclick = async () => { const data = await request("/api/sessions", {method:"POST"}); await select(data.current); };
   document.getElementById("composer").onsubmit=submit;
+  document.getElementById("mobileImageButton").onclick = () => imageInput.click();
+  document.getElementById("mobileFileButton").onclick = () => fileInput.click();
+  imageInput.onchange = () => { const file = imageInput.files && imageInput.files[0]; imageInput.value = ""; uploadSelected(file, "image"); };
+  fileInput.onchange = () => { const file = fileInput.files && fileInput.files[0]; fileInput.value = ""; uploadSelected(file, "file"); };
   // 联网搜索开关（跟桌面工具栏同一个字段 allow_auto_web_search；type=button 别触发表单提交）
   function renderWebSearchToggle(on) { webToggle.textContent = "联网搜索：" + (on ? "on" : "off"); webToggle.classList.toggle("on", !!on); }
   webToggle.onclick = async () => {

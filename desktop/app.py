@@ -174,15 +174,26 @@ class Api:
 
     def list_lan_ips(self):
         """返回桌面当前可用于手机接入的私网 IPv4。"""
-        candidates = set()
-        try:
-            for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-                address = item[4][0]
-                if _valid_lan_ip(address):
-                    candidates.add(address)
-        except OSError:
-            pass
-        return sorted(candidates, key=lambda address: tuple(map(int, address.split("."))))
+        return list_lan_ips()
+
+
+def list_lan_ips() -> list[str]:
+    candidates = set()
+    try:
+        for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            address = item[4][0]
+            if _valid_lan_ip(address):
+                candidates.add(address)
+    except OSError:
+        pass
+    return sorted(candidates, key=lambda address: tuple(map(int, address.split("."))))
+
+
+def validate_local_lan_ip(ip: str) -> None:
+    ips = list_lan_ips()
+    if not _valid_lan_ip(ip) or ip not in ips:
+        hint = "、".join(ips) or "未检测到私网 IPv4，请确认热点或网线已连接"
+        raise ValueError(f"请选择本机现有的私网 IPv4 地址（当前可用：{hint}）")
 
 
 def pick_port() -> int:
@@ -334,8 +345,7 @@ def main() -> None:
             if not enabled:
                 stop_lan_server()
                 return
-            if not _valid_lan_ip(ip):
-                raise ValueError("请选择当前手机热点对应的私网 IPv4 地址")
+            validate_local_lan_ip(ip)
             token = str(settings.get("lan_token") or "") or lan.new_token()
             public_origin = lan.normalize_origin(settings.get("lan_public_origin", ""))
             if not settings.get("lan_token"):

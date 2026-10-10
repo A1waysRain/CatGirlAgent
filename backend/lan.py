@@ -95,12 +95,16 @@ def is_idle(timeout: float = IDLE_TIMEOUT) -> bool:
         return _enabled and _last_activity > 0 and time.monotonic() - _last_activity >= timeout
 
 
+class LoginRateLimited(Exception):
+    """登录失败次数超过当前窗口限额。"""
+
+
 def login(token: str) -> str | None:
     with _lock:
         now = time.monotonic()
         _login_failures[:] = [at for at in _login_failures if now - at < 60]
         if len(_login_failures) >= 10:
-            return None
+            raise LoginRateLimited
         if not _enabled or not _token or not hmac.compare_digest((token or "").encode(), _token.encode()):
             _login_failures.append(now)
             return None

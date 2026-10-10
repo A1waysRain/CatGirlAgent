@@ -19,8 +19,12 @@
     <section id="chat" class="mobile-chat" aria-live="polite"></section>
     <form id="composer" class="mobile-composer">
       <div class="mobile-tools">
+        <button id="mobileImageButton" type="button" class="mobile-upload-button" title="上传图片">图片</button>
+        <button id="mobileFileButton" type="button" class="mobile-upload-button" title="上传文件">文件</button>
         <button id="webSearchToggle" type="button" class="mobile-web-toggle"
                 title="猫娘能否自己上网查。关（默认）：只有你说「搜/查」或知识库没材料时才联网">联网搜索：off</button>
+        <input id="mobileImageInput" type="file" accept="image/*" hidden>
+        <input id="mobileFileInput" type="file" hidden>
       </div>
       <textarea id="input" rows="1" maxlength="6000" placeholder="和猫娘说点什么…"></textarea>
       <button id="send" type="submit">发送</button>
