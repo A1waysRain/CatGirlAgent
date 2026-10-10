@@ -30,6 +30,12 @@ ALL_MDS = [
 
 def resolve(fname: str) -> str:
     """把教材里的裸文件名映射到真实路径（相对 Cat_Girl/）。"""
+    if fname.startswith("Cat_Girl/"):
+        fname = fname[len("Cat_Girl/"):]
+    if fname.startswith(("backend/", "js/", "desktop/")):
+        return fname
+    if fname.startswith("routers/"):
+        return "backend/" + fname
     if fname == "app.js":
         return "js/app.js"
     if fname == "chat.py":
@@ -37,7 +43,7 @@ def resolve(fname: str) -> str:
     return f"backend/{fname}"
 
 
-REF_RE = re.compile(r"([\w\-]+\.(?:py|js)):(\d+)")
+REF_RE = re.compile(r"((?:[\w.-]+/)*[\w\-]+\.(?:py|js)):(\d+)")
 
 
 def check(md: str):
