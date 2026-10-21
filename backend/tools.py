@@ -2002,12 +2002,164 @@ def _fact_fetch(url: str, lang: str = "en", limit: int = 120_000) -> tuple[str, 
         return "", f"读取失败：{exc}"
 
 
-def _fact_search(query: str, max_sources: int, freshness: str = "current") -> list[dict]:
-    """搜索 API 优先，公开 Bing RSS 作为无 Key 降级；按问题语言选市场、按需带时效过滤。"""
-    key = (getattr(settings, "web_search_api_key", "") or "").strip()
-    provider = (getattr(settings, "web_search_provider", "brave") or "brave").lower()
+# ---- DeepSeek 官方 Search / Fetch API（2026-10-17 开放） ----
+# 文档：https://api-docs.deepseek.com/zh-cn/guides/search/
+# 复用 deepseek_api_key，按成功请求计费（约 5 元 / 1000 次）。
+# ★最大价值：need_content=true 时**一次检索就带回正文**，不用再逐页抓 HTML，
+# 从根上绕开 Bing RSS 的「不认 freshness / 首页导航 / JS 墙 / 403」一堆老坑。
+_DEEPSEEK_SEARCH_URL = "https://api.deepseek.com/v1/tools/search"
+_DEEPSEEK_FETCH_URL = "https://api.deepseek.com/v1/tools/fetch"
+_DEEPSEEK_QUERY_MAX = 128          # API 限制：query 最多 128 个 Unicode 字符
+_DEEPSEEK_FRESH_DAYS = {"day": 1, "week": 7, "month": 30, "year": 365}
+# Fetch 返回的 Markdown 会把 ASCII 标点转义成 `\#`、`\:`、`\-`；喂模型前还原成人读的样子。
+# 只处理反斜杠 + ASCII 标点，不碰 `C:\Users` 这类路径（反斜杠后面是字母）。
+_MD_ESCAPE_RE = re.compile(r"\\([!-/:-@\[-`{-~])")
+
+
+def _clean_markdown(text: str) -> str:
+    return _MD_ESCAPE_RE.sub(r"\1", text or "")
+
+
+def _deepseek_key() -> str:
+    return (getattr(settings, "deepseek_api_key", "") or "").strip()
+
+
+def _deepseek_tools_url(default: str) -> str:
+    """从 deepseek_base_url 推导 tools 端点，兼容自定义网关。
+
+    默认 base 是 .../v1/chat/completions → 去掉尾部 /chat/completions，
+    再拼 /tools/search（或 /tools/fetch）；推导不出来就回退官方地址。
+    """
+    raw = (getattr(settings, "deepseek_base_url", "") or "").strip()
+    if not raw:
+        return default
+    base = raw.rstrip("/")
+    suffix = "/chat/completions"
+    if base.lower().endswith(suffix):
+        base = base[: -len(suffix)].rstrip("/")
+    if not base.lower().startswith(("http://", "https://")):
+        return default
+    # 只写了 https://api.deepseek.com 时补上 /v1
+    if "api.deepseek.com" in base.lower() and not base.lower().endswith("/v1"):
+        path = urllib.parse.urlsplit(base).path.rstrip("/")
+        if not path.endswith("/v1"):
+            base = base + "/v1"
+    return base + ("/tools/search" if default.endswith("/search") else "/tools/fetch")
+
+
+def _deepseek_search_query(query: str, freshness: str, domains: list[str] | None) -> str:
+    """拼检索词：保留原问题，按需追加站点/时效操作符，并压在 128 字符内。"""
+    q = (query or "").strip()
+    ops: list[str] = []
+    days = _DEEPSEEK_FRESH_DAYS.get((freshness or "").strip().lower())
+    if days:
+        since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+        ops.append("after:" + since.strftime("%Y-%m-%d"))
+    wanted = [str(d).strip().lower().removeprefix("www.") for d in (domains or []) if str(d).strip()]
+    if wanted:
+        ops.append(" OR ".join(f"site:{d}" for d in wanted[:4]))
+    suffix = " ".join(ops)
+    room = _DEEPSEEK_QUERY_MAX - (len(suffix) + 1 if suffix else 0)
+    q = q[:max(1, room)].strip()
+    return (" ".join([q, suffix]) if suffix else q)[:_DEEPSEEK_QUERY_MAX]
+
+
+def _fact_search_deepseek(query: str, max_sources: int, freshness: str = "current",
+                          domains: list[str] | None = None,
+                          original: str | None = None) -> list[dict]:
+    """调用 DeepSeek Search API，返回与 Bing/Brave 同形状的结果（多带正文与评分）。"""
+    key = _deepseek_key()
+    if not key:
+        return []
+    body = {
+        "query": _deepseek_search_query(query, freshness, domains),
+        "count": max(1, min(50, max(10, int(max_sources) * 2))),
+        "need_content": True,
+    }
+    if original and len(original) <= _DEEPSEEK_QUERY_MAX:
+        body["ori_question"] = original
+    req = urllib.request.Request(
+        _deepseek_tools_url(_DEEPSEEK_SEARCH_URL),
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": _FACT_UA,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=max(20, int(settings.web_fact_timeout))) as response:
+        payload = json.loads(response.read(8_000_000).decode("utf-8", errors="replace"))
+    rows: list[dict] = []
+    for item in (payload.get("results") or [])[:max_sources]:
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        rows.append({
+            "title": item.get("title") or "",
+            "url": url,
+            "snippet": item.get("summary") or item.get("snippet") or "",
+            "published": item.get("date") or "",
+            "content": _clean_markdown(item.get("content") or ""),
+            "rerank_score": item.get("rerank_score"),
+            "authority": item.get("authority"),
+            "site_name": item.get("site_name") or "",
+            "search_provider": "deepseek",
+        })
+    return rows
+
+
+def _fact_fetch_deepseek(url: str) -> tuple[str, str | None]:
+    """Search 没给正文时，用 DeepSeek Fetch 兜底抓 Markdown；失败返回 (\"\", 原因)。"""
+    key = _deepseek_key()
+    if not key:
+        return "", "未配置 DeepSeek API Key"
+    if not re.match(r"^https?://", url or "", re.I):
+        return "", "网址不是允许读取的 HTTP/HTTPS 地址"
+    req = urllib.request.Request(
+        _deepseek_tools_url(_DEEPSEEK_FETCH_URL),
+        data=json.dumps({"url": url}, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": _FACT_UA,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=max(20, int(settings.web_fact_timeout))) as response:
+            payload = json.loads(response.read(8_000_000).decode("utf-8", errors="replace"))
+        content = _clean_markdown(str(payload.get("content") or "")).strip()
+        if not content:
+            return "", "抓取接口没有返回正文"
+        return " ".join(content.split()), None
+    except Exception as exc:
+        return "", f"抓取失败：{type(exc).__name__}"
+
+
+def _fact_search(query: str, max_sources: int, freshness: str = "current",
+                 domains: list[str] | None = None,
+                 original: str | None = None) -> list[dict]:
+    """DeepSeek Search 优先；Brave / Bing RSS 作为降级。
+
+    顺序：provider=deepseek → DeepSeek Search（失败或空结果降级 Bing）
+          provider=brave + 有 Key → Brave（失败降级 Bing）
+          其余 → Bing RSS
+    """
+    provider = (getattr(settings, "web_search_provider", "deepseek") or "deepseek").lower()
     mk = _fact_market(query)
     _, brave_fresh, bing_fresh = _fact_freshness(freshness)
+    if provider == "deepseek":
+        try:
+            rows = _fact_search_deepseek(query, max_sources, freshness, domains, original)
+            if rows:
+                return rows
+            _log("verify_current_fact deepseek_empty fallback")
+        except Exception as exc:
+            _log(f"verify_current_fact deepseek_failed {type(exc).__name__}")
+    key = (getattr(settings, "web_search_api_key", "") or "").strip()
     results: list[dict] = []
     if key and provider == "brave":
         try:
@@ -2023,7 +2175,10 @@ def _fact_search(query: str, max_sources: int, freshness: str = "current") -> li
             for item in (payload.get("web", {}).get("results", []) or [])[:max_sources]:
                 link = item.get("url")
                 if link:
-                    results.append({"title": item.get("title", ""), "url": link, "snippet": item.get("description", ""), "published": item.get("age", "")})
+                    results.append({"title": item.get("title", ""), "url": link,
+                                    "snippet": item.get("description", ""),
+                                    "published": item.get("age", ""),
+                                    "search_provider": "brave"})
             return results
         except Exception as exc:
             _log(f"verify_current_fact api_failed {type(exc).__name__}")
@@ -2043,6 +2198,7 @@ def _fact_search(query: str, max_sources: int, freshness: str = "current") -> li
                 "url": item.findtext("link", ""),
                 "snippet": item.findtext("description", ""),
                 "published": item.findtext("pubDate", ""),
+                "search_provider": "bing",
             })
     except Exception as exc:
         _log(f"verify_current_fact rss_failed {type(exc).__name__}")
@@ -2071,7 +2227,10 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
     search_q = _normalize_query(query)
     mk = _fact_market(search_q)
     mkt, lang = mk["market"], mk["lang"]
-    raw_results = _fact_search(search_q, max_sources * 2, fresh_key)
+    raw_results = _fact_search(search_q, max_sources * 2, fresh_key,
+                               domains=domains, original=query)
+    search_provider = next((str(r.get("search_provider")) for r in raw_results
+                            if r.get("search_provider")), "")
     # ★时效性：抓取前先按发布时间排序，让**新鲜来源先占名额**、旧稿排到最后。
     # 服务端没有时效过滤可用——Bing RSS 实测**完全不认** `freshness`（Day/Week/Month
     # 与老式 `filters=ex1:"ez1"` 五种写法返回字节相同的结果），所以只能客户端自己排。
@@ -2106,7 +2265,20 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
         if per_domain.get(host, 0) >= _FACT_MAX_PER_DOMAIN:
             continue
         per_domain[host] = per_domain.get(host, 0) + 1
-        text, error = _fact_fetch(url, lang)
+        # DeepSeek Search 的 need_content 已经带回正文，直接拿来判级，省掉逐页抓取；
+        # 没带正文时才走 Fetch（同家接口，Markdown 更干净），最后才用自建抓取兜底。
+        search_text = str(item.get("content") or "").strip()
+        if search_text:
+            text, error, via = search_text, None, "search"
+        elif item.get("search_provider") == "deepseek" and _deepseek_key():
+            text, error = _fact_fetch_deepseek(url)
+            via = "deepseek_fetch"
+            if not text:
+                text, error = _fact_fetch(url, lang)
+                via = "fetch"
+        else:
+            text, error = _fact_fetch(url, lang)
+            via = "fetch"
         grade, reasons = _grade_source(item, text, error, search_q)
         published = item.get("published", "")
         # ★切题度：读到正文 ≠ 这页在讲这件事。只对真读到正文的来源算（读失败没正文可算）。
@@ -2116,7 +2288,8 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
             "published": published, "age_days": _fact_age_days(published),
             "snippet": item.get("snippet", "")[:1200],
             "extract": text[:_FACT_REPORT_EXTRACT_CHARS], "grade": grade, "grade_reasons": reasons,
-            "read_error": error,
+            "read_error": error, "extract_via": via,
+            "rerank_score": item.get("rerank_score"), "authority": item.get("authority"),
             "topic_match": ("strong" if relevance["strong"] else "weak") if relevance else "unknown",
             "relevance": None if relevance is None else {
                 "hits": relevance["hits"], "total": relevance["total"],
@@ -2180,6 +2353,7 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
     result = {
         "status": status, "answer": answer, "confidence": confidence,
         "freshness": fresh_key, "market": mkt,
+        "search_provider": search_provider or (getattr(settings, "web_search_provider", "deepseek") or "deepseek"),
         "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "elapsed_s": round(time.monotonic() - started, 1),
         "evidence": {
@@ -2188,6 +2362,7 @@ def tool_verify_current_fact(query: str, freshness: str = "current", domains: li
             "independent_domains": len(full_domains),
             # ★把"读到的正文"和"真在讲这件事的正文"分开报——两者不是一回事
             "topic_strong": len(topical), "topic_weak": len(weak),
+            "content_from_search": sum(1 for s in sources if s.get("extract_via") == "search"),
         },
         "sources": sources, "caveats": caveats,
     }
@@ -2233,8 +2408,10 @@ def _fact_cache_key(query: str, freshness: str, domains: list[str] | None, max_s
     domain_key = tuple(sorted(str(d).strip().lower().removeprefix("www.") for d in (domains or []) if str(d).strip()))
     payload = {"query": _normalize_query(query), "freshness": freshness,
                "domains": domain_key, "max_sources": int(max_sources),
-               "provider": getattr(settings, "web_search_provider", "brave"),
-               "has_api_key": bool((getattr(settings, "web_search_api_key", "") or "").strip())}
+               "provider": getattr(settings, "web_search_provider", "deepseek"),
+               "has_api_key": bool((getattr(settings, "web_search_api_key", "") or "").strip()),
+               # 换 Key 后不能误命中旧缓存；DeepSeek 检索复用主 Key
+               "has_deepseek_key": bool(_deepseek_key())}
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
@@ -2328,9 +2505,10 @@ def fact_brief(query: str, max_sources: int = 4, limit: int = _FACT_BRIEF_LIMIT,
         if not evidence.get("full"):
             return ""
 
-        head = ("核验状态={status}；置信度={confidence}；市场={market}；核验时间={checked_at}；"
-                "正文证据={full}条/独立来源={independent_domains}个").format(
+        head = ("核验状态={status}；置信度={confidence}；检索源={provider}；市场={market}；"
+                "核验时间={checked_at}；正文证据={full}条/独立来源={independent_domains}个").format(
             status=report.get("status", "unknown"), confidence=report.get("confidence", "unknown"),
+            provider=report.get("search_provider", "unknown"),
             market=report.get("market", ""), checked_at=report.get("checked_at", ""),
             full=evidence.get("full", 0), independent_domains=evidence.get("independent_domains", 0))
 

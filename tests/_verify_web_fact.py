@@ -64,6 +64,8 @@ class _Settings:
         self.web_search_api_key = key
         self.web_search_provider = provider
         self.web_fact_timeout = timeout
+        self.deepseek_api_key = ""
+        self.deepseek_base_url = "https://api.deepseek.com/v1/chat/completions"
 
 
 class _Net:

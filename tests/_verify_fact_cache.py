@@ -32,7 +32,7 @@ def check(label, condition, extra=""):
 calls = {"search": 0, "fetch": 0}
 
 
-def fake_search(query, max_sources, freshness="current"):
+def fake_search(query, max_sources, freshness="current", **kwargs):
     calls["search"] += 1
     return [{"title": "近期官方资料", "url": "https://example.com/fact",
              "snippet": "摘要", "published": "2026-09-28"}]

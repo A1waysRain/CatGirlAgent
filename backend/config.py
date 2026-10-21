@@ -65,9 +65,12 @@ class Settings(BaseSettings):
     deepseek_temperature: float = 0.6
     # 请求超时（秒）
     request_timeout: int = 60
-    # 可选：Brave Search API Key。未配置时 verify_current_fact 使用 Bing RSS。
+    # 联网检索源：
+    # - "deepseek"  用 DeepSeek 官方 Search/Fetch API（复用 deepseek_api_key，按次计费）
+    # - "brave"     用可选 Brave Search Key，未配置 Key 时自动降级 Bing RSS
+    # 两种模式在失败/空结果时都会降级 Bing RSS，保证断网时不至于彻底没结果。
     web_search_api_key: str = Field(default_factory=_load_user_web_search_key)
-    web_search_provider: str = "brave"
+    web_search_provider: str = "deepseek"
     web_fact_timeout: int = 12
 
     model_config = SettingsConfigDict(
